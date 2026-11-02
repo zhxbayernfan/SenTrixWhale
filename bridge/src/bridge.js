@@ -57,14 +57,15 @@ function genCheckQA(key, value) {
 async function shwSearch(query) {
     if (!cfg.shw || !cfg.shw.enabled) return null;  // 未启用: 走本地记忆
     try {
-        const r = await fetch(cfg.shw.apiBase + cfg.shw.retrievalEndpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, top_k: 5 }),
-        });
-        if (!r.ok) return null;
+        const r = await fetch(cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(query) + '&top_k=5');
+        if (!r.ok) { log('[SHW] HTTP ' + r.status); return null; }
         const j = await r.json();
-        return j.results || j;  // SHW检索结果(结构按SHW API契约)
+        const items = (j.items || []).slice(0, 5).map(it => ({
+            file: it.asset && it.asset.file_name,
+            time: it.asset && it.asset.captured_at,
+            type: it.asset && it.asset.media_type,
+        })).filter(x => x.file);
+        return { count: (j.items || []).length, items };  // 精简素材给DS
     } catch (e) { log('[SHW] 检索失败: ' + e.message); return null; }
 }
 
@@ -80,8 +81,8 @@ async function think(userText, who) {
     }
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
     const hits = await shwSearch(userText);
-    const memBlock = hits
-        ? '[SHW记忆检索结果]\n' + JSON.stringify(hits).slice(0, 3000)
+    const memBlock = hits && hits.count
+        ? '[SHW记忆检索] 命中' + hits.count + '条:\n' + hits.items.map(x => '- ' + x.file + ' (' + (x.time || '') + ')').join('\n') + '\n(回答时可引用这些记忆, 如需细节说"出示证据")'
         : '[本地记忆]\n' + memText();
 
     const sys = `你是SenTrixWhale, SHW记忆助手产品的工程鲸。\n${cfg.roleNotes || ''}\n\n${memBlock}\n\n回答规则: 有记忆依据就引用并出示依据; 记忆里没有的, 如实说"记忆里没有, 你可以告诉我"。`;
