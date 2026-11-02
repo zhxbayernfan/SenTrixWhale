@@ -1,4 +1,4 @@
-// tests/failure_scenarios.test.js — SenTrixWhale 失败场景测试(261102)
+// tests/failure_scenarios.test.js — SenTrixWhale 失败场景测试
 // 职责: 验证SHW宕机/网络异常/超时等降级行为
 // 运行: node failure_scenarios.test.js
 

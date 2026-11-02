@@ -1,4 +1,4 @@
-# SenTrixWhale API文档(261102)
+# SenTrixWhale API文档
 
 ## SHW检索API
 

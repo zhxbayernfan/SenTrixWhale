@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// monitoring/metrics.js — SenTrixWhale Prometheus指标采集(261102)
+// monitoring/metrics.js — SenTrixWhale Prometheus指标采集
 // 职责: 采集请求数/延迟/错误率, 以Prometheus格式暴露在9090端口
 // 用法: node metrics.js (启动指标服务 http://224:9090/metrics)
 

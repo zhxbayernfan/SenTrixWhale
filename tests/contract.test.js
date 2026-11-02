@@ -1,4 +1,4 @@
-// tests/contract.test.js — SHW检索API契约测试(261102)
+// tests/contract.test.js — SHW检索API契约测试
 // 职责: 验证SHW检索API响应结构/边界条件/demo服务
 // 运行: node contract.test.js
 

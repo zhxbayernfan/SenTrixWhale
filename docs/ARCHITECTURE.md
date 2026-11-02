@@ -1,4 +1,4 @@
-# SenTrixWhale 架构设计 (261102)
+# SenTrixWhale 架构设计 
 
 ## 系统全景
 ```

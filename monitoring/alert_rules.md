@@ -1,4 +1,4 @@
-# monitoring/alert_rules.md — SenTrixWhale 告警规则(261102)
+# monitoring/alert_rules.md — SenTrixWhale 告警规则
 # 定义: 基于Prometheus指标的告警阈值, 适配企业微信/邮件通知
 
 ## 告警规则

@@ -1,4 +1,4 @@
-// tests/e2e.test.js — SenTrixWhale 端到端测试(261102)
+// tests/e2e.test.js — SenTrixWhale 端到端测试
 // 职责: 发照片→检索→验证完整链路
 // 运行: node e2e.test.js
 

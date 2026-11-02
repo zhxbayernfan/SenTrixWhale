@@ -1,4 +1,4 @@
-# SenTrixWhale 运维手册(261102)
+# SenTrixWhale 运维手册
 
 ## 日常巡检
 

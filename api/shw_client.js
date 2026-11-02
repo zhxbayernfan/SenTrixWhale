@@ -1,4 +1,4 @@
-// api/shw_client.js — SHW检索API适配器(SenTrixWhale工程鲸, 261102)
+// api/shw_client.js — SHW检索API适配器
 // 职责: 封装SHW 2.0检索API, 提供类型安全/重试/多通道路由/证据链格式化
 // 契约: GET /api/v1/search?q={词}&top_k=N | 响应: {query, backend, degraded, items, channel_trace}
 

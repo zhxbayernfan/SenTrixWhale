@@ -1,4 +1,4 @@
-# SenTrixWhale 部署指南(261102)
+# SenTrixWhale 部署指南
 
 > 从零到跑通, 预计15分钟
 

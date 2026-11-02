@@ -1,4 +1,4 @@
-// tests/performance.test.js — SenTrixWhale 性能测试(261102)
+// tests/performance.test.js — SenTrixWhale 性能测试
 // 职责: 并发100检索延迟<500ms, 吞吐量测试
 // 运行: node performance.test.js
 

@@ -1,4 +1,4 @@
-// media/ingest.js — 媒体入库管线(SenTrixWhale工程鲸, 261102)
+// media/ingest.js — 媒体入库管线
 // 职责: 照片/视频 → caption生成 → SHW入库 → 索引更新
 // 阶段: Alpha(骨架), 阶段2完整实现
 
