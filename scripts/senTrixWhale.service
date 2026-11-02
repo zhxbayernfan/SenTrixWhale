@@ -1,0 +1,33 @@
+[Unit]
+Description=SenTrixWhale Bridge Service
+After=network-online.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=sscy
+Group=sscy
+WorkingDirectory=/home/sscy/lingbot-map/005SenTrixWhale/bridge
+
+# 环境变量
+Environment="NODE_ENV=production"
+Environment="WHALE_HOME=/home/sscy/lingbot-map/005SenTrixWhale/bridge"
+
+ExecStart=/usr/bin/node /home/sscy/lingbot-map/005SenTrixWhale/bridge/src/bridge.js
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# 日志
+StandardOutput=append:/home/sscy/lingbot-map/005SenTrixWhale/logs/bridge-stdout.log
+StandardError=append:/home/sscy/lingbot-map/005SenTrixWhale/logs/bridge-stderr.log
+
+# 资源限制
+LimitNOFILE=65536
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target
