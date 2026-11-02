@@ -1,0 +1,6 @@
+state/
+node_modules/
+*.log
+napcat-data/
+napcat3/
+config.json
