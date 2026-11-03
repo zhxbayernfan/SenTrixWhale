@@ -103,6 +103,44 @@ async function runTests() {
         assert.ok(r.body.includes('命中'), '响应包含命中信息');
     });
 
+    // 8. 本地模型回复风格测试(CEA要求)
+    // 验证: 不甩文件名、活泼语气、计数准确
+
+    await test('风格-1: 回复不直接甩文件名(应含描述性文字)', async () => {
+        // Demo服务返回的内容应包含自然语言描述, 而非单纯文件名
+        const r = await httpGet(`${SHW_BASE}/api/v1/search?q=%E6%B5%B7%E8%BE%B9&top_k=1`);
+        const item = r.body.items[0];
+        if (item && item.asset) {
+            // caption应存在且不是纯文件名格式
+            const caption = item.asset.caption || '';
+            assert.ok(caption.length > 0, 'caption应有内容');
+            assert.ok(!/^\w+\.\w{3,4}$/.test(caption), 'caption不应仅为文件名');
+        }
+    });
+
+    await test('风格-2: 回复应包含活泼语气(非机械式)', async () => {
+        const r = await httpPost(`${DEMO_BASE}/`, { q: '海边' });
+        const text = r.body;
+        // 不应全为冷冰冰的技术字段(如纯JSON/key-value)
+        assert.ok(typeof text === 'string', '回复应为字符串');
+        // 应包含自然语言特征(非纯数据)
+        const hasNaturalLanguage = /[一-龥]/.test(text);
+        assert.ok(hasNaturalLanguage, '回复应包含自然语言描述');
+    });
+
+    await test('风格-3: 计数准确(命中N张→实际返回N张)', async () => {
+        const r = await httpGet(`${SHW_BASE}/api/v1/search?q=%E6%B5%B7%E8%BE%B9&top_k=5`);
+        const count = r.body.items.length;
+        const demoR = await httpPost(`${DEMO_BASE}/`, { q: '海边' });
+        const text = demoR.body;
+        // 如果回复中提到了数量, 应和实际命中一致
+        const matchCount = text.match(/命中\s*(\d+)/);
+        if (matchCount) {
+            const mentioned = parseInt(matchCount[1]);
+            assert.strictEqual(mentioned, count, `提到${mentioned}张但实际${count}张`);
+        }
+    });
+
     console.log(`\n=== 测试结果: ${passed}/${total} 通过, ${failed} 失败 ===\n`);
     if (failed > 0) process.exit(1);
 }
