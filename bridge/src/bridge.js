@@ -69,7 +69,31 @@ async function shwSearch(query) {
     } catch (e) { log('[SHW] 检索失败: ' + e.message); return null; }
 }
 
+// ---------- 角色卡加载 ----------
+const roleText = () => {
+    try { return fs.readFileSync(path.join(ROOT, cfg.paths.roleCard), 'utf8'); }
+    catch { return '你是SenTrixWhale,一条工程向的鲸鱼——干练务实,但不失活泼(适度用🐳)。'; }
+};
+
 // ---------- 对话骨架: DS API ----------
+
+// ---------- 工程鲸chatLog(调试工具,可随意清空) ----------
+const CL = path.join(ROOT, 'state', 'chat_log_sentrix.jsonl');
+const chatLog = (obj) => {
+    const d = new Date(); const p2 = (x) => String(x).padStart(2, '0');
+    const ordered = {
+        event: obj.event,
+        who: obj.who,
+        dest: obj.dest,
+        ts: d.getFullYear() + '-' + p2(d.getMonth()+1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()),
+        in: obj.in,
+        out: obj.out,
+    };
+    if (obj.usage) { ordered.usage = obj.usage; ordered.cost = obj.cost; }
+    if (obj.error) ordered.error = obj.error;
+    fs.appendFileSync(CL, JSON.stringify(ordered) + '\n');
+};
+
 const owners = () => (cfg.owners || []).map(String);
 const isKnown = (qq) => owners().includes(String(qq)) || (cfg.friends || []).map(String).includes(String(qq));
 
@@ -81,11 +105,16 @@ async function think(userText, who) {
     }
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
     const hits = await shwSearch(userText);
-    const memBlock = hits && hits.count
-        ? '[SHW记忆检索] 命中' + hits.count + '条:\n' + hits.items.map(x => '- ' + x.file + ' (' + (x.time || '') + ')').join('\n') + '\n(回答时可引用这些记忆, 如需细节说"出示证据")'
-        : '[本地记忆]\n' + memText();
+    let memBlock;
+    if (hits && hits.count > 0) {
+        // 自然语言包装: 不甩文件名, 给DS摘要线索
+        const timeHint = hits.items[0]?.time ? ` (含${hits.items[0].time.split(' ')[0]}的记录)` : '';
+        memBlock = `[记忆库线索] 找到${hits.count}条相关记忆${timeHint}, 涵盖"${userText}"相关内容。回答时用自然语言描述(如"我记得有一张海边的照片"), 不要罗列文件名。如需具体证据, 告诉用户可以说"出示证据"。`;
+    } else {
+        memBlock = '[本地记忆]\n' + memText();
+    }
 
-    const sys = `你是SenTrixWhale, SHW记忆助手产品的工程鲸。\n${cfg.roleNotes || ''}\n\n${memBlock}\n\n回答规则: 有记忆依据就引用并出示依据; 记忆里没有的, 如实说"记忆里没有, 你可以告诉我"。`;
+    const sys = roleText() + '\n\n' + memBlock + '\n\n回答规则: 有记忆依据就引用并出示依据; 记忆里没有的, 如实说"记忆库里没有, 你可以告诉我"。';
 
     const r = await fetch(cfg.ds.baseUrl + '/chat/completions', {
         method: 'POST',
@@ -112,6 +141,10 @@ async function think(userText, who) {
 
     const reply = (m.content || '').trim();
     if (!reply) throw new Error('空content(思考挤占?)');
+
+    // 记录对话到chatLog(工程鲸调试工具,可随意清空)
+    chatLog({ event: 'chat', who: senderId, dest: 'private', in: userText, out: reply, usage: u, cost: costOf(u) });
+
     return reply;
 }
 
@@ -186,6 +219,3 @@ async function replyTo(dest, text) {
     });
     if (!r.ok) log('[发送失败->' + dest.id + '] ' + r.status);
 }
-
-log(`[启动] SenTrixWhale bridge | 护栏=${cfg.guard.dailyLimitYuan}元/${cfg.guard.maxCallsPerDay}次 | SHW检索=${cfg.shw && cfg.shw.enabled ? '启用' : '桩'}`);
-connect();

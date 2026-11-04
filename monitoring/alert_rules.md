@@ -46,11 +46,10 @@ send_wx() {
 
 ### 邮件(SMTP)
 ```bash
-# 使用001.md中的SMTP配置
+# SMTP配置见工程内部文档(不暴露密码)
 SMTP_SERVER="smtp.qq.com:587"
 FROM="zhxbayernfan3@qq.com"
 TO="zhxbayernfan3@qq.com"
-# 密码见001IP0.224CDaily.md L42
 ```
 
 ## 日志轮转
