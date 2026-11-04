@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { matchSticker } = require('../stickers');
 // SenTrixWhale bridge v0.1 — 工程鲸桥接(零依赖, Node>=22)
 // 定位: SHW记忆助手的QQ交互前端 — 对话即记忆输入, 检索即回答, 质检即信任.
 //
@@ -108,13 +109,14 @@ async function think(userText, who) {
     let memBlock;
     if (hits && hits.count > 0) {
         // 自然语言包装: 不甩文件名, 给DS摘要线索
-        const timeHint = hits.items[0]?.time ? ` (含${hits.items[0].time.split(' ')[0]}的记录)` : '';
-        memBlock = `[记忆库线索] 找到${hits.count}条相关记忆${timeHint}, 涵盖"${userText}"相关内容。回答时用自然语言描述(如"我记得有一张海边的照片"), 不要罗列文件名。如需具体证据, 告诉用户可以说"出示证据"。`;
+        const firstItem = hits.items[0];
+        const timeHint = firstItem?.time ? `${firstItem.time.split(' ')[0]}那天` : '之前';
+        memBlock = `我好像记得一些相关的事情... (${timeHint}的记录)。像朋友一样自然聊聊就好，不用报数字或列清单。如果用户想看具体证据，再说"出示证据"`;
     } else {
-        memBlock = '[本地记忆]\n' + memText();
+        memBlock = memText() ? `我的记忆里有这些：\n${memText()}` : '我的记忆还空着呢，你可以告诉我一些事情呀';
     }
 
-    const sys = roleText() + '\n\n' + memBlock + '\n\n回答规则: 有记忆依据就引用并出示依据; 记忆里没有的, 如实说"记忆库里没有, 你可以告诉我"。';
+    const sys = roleText() + '\n\n' + memBlock + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。适度用emoji(🐳💙✨)，别堆砌。';
 
     const r = await fetch(cfg.ds.baseUrl + '/chat/completions', {
         method: 'POST',
@@ -143,7 +145,7 @@ async function think(userText, who) {
     if (!reply) throw new Error('空content(思考挤占?)');
 
     // 记录对话到chatLog(工程鲸调试工具,可随意清空)
-    chatLog({ event: 'chat', who: senderId, dest: 'private', in: userText, out: reply, usage: u, cost: costOf(u) });
+    chatLog({ event: 'chat', who: who, dest: 'private', in: userText, out: reply, usage: u, cost: costOf(u) });
 
     return reply;
 }
@@ -201,16 +203,22 @@ async function handle(userText, senderId, dest) {
     lastCall = Date.now();
     try {
         const reply = await think(userText, senderId);
-        await replyTo(dest, reply);
+        await replyTo(dest, reply, userText);
     } catch (e) {
         log('[错误] ' + e.message);
         await replyTo(dest, '处理出错了, 请稍后再试。');
     }
 }
-async function replyTo(dest, text) {
+async function replyTo(dest, text, userInput) {
+    const msg = [{ type: 'text', data: { text } }];
+    // 匹配表情包
+    const stickerPath = matchSticker(text, userInput);
+    if (stickerPath) {
+        msg.push({ type: 'image', data: { file: stickerPath } });
+    }
     const body = dest.kind === 'group'
-        ? { group_id: Number(dest.id), message: [{ type: 'text', data: { text } }] }
-        : { user_id: Number(dest.id), message: [{ type: 'text', data: { text } }] };
+        ? { group_id: Number(dest.id), message: msg }
+        : { user_id: Number(dest.id), message: msg };
     const url = dest.kind === 'group' ? '/send_group_msg' : '/send_private_msg';
     const r = await fetch(cfg.napcat.httpUrl + url, {
         method: 'POST',
@@ -219,3 +227,8 @@ async function replyTo(dest, text) {
     });
     if (!r.ok) log('[发送失败->' + dest.id + '] ' + r.status);
 }
+
+// ---------- 启动 ----------
+log("[启动] SenTrixWhale bridge | 护栏=10元/500次 | SHW检索=启用 | 模型=本地");
+connect();
+
