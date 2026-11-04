@@ -14,7 +14,7 @@
 
 ```bash
 # 1. 确认代码位置
-cd /home/sscy/lingbot-map/005SenTrixWhale
+cd $SENTRIXWHALE_ROOT
 
 # 2. 检查依赖
 node -v        # 应 >= 22
@@ -31,8 +31,8 @@ curl http://127.0.0.1:9598/api/health
 # NapCat3以Docker方式运行(已在005SenTrixWhale/napcat3/配置好)
 # 启动NapCat容器(首次)
 docker run -d --name napcat3 \
-  -v /home/sscy/lingbot-map/005SenTrixWhale/napcat3/QQ:/app/QQ \
-  -v /home/sscy/lingbot-map/005SenTrixWhale/napcat3/config:/app/config \
+  -v $SENTRIXWHALE_ROOT/napcat3/QQ:/app/QQ \
+  -v $SENTRIXWHALE_ROOT/napcat3/config:/app/config \
   -p 3001:3001 \
   napcat/napcat:latest
 
@@ -47,7 +47,7 @@ curl http://127.0.0.1:3001/
 ## 三、一键启动
 
 ```bash
-cd /home/sscy/lingbot-map/005SenTrixWhale
+cd $SENTRIXWHALE_ROOT
 bash scripts/start.sh
 ```
 
@@ -66,7 +66,7 @@ Demo:      ✅
 
 🎉 SenTrixWhale 启动完成!
    演示地址: http://192.168.0.224:7738
-   日志目录: /home/sscy/lingbot-map/005SenTrixWhale/logs
+   日志目录: $SENTRIXWHALE_ROOT/logs
 ```
 
 ## 四、验证

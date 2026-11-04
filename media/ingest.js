@@ -8,7 +8,7 @@ const path = require('path');
 
 class MediaIngest {
     constructor(options = {}) {
-        this.storageDir = options.storageDir || '/home/sscy/lingbot-map/005SenTrixWhale/storage';
+        this.storageDir = options.storageDir || process.env.SENTRIXWHALE_ROOT + '/storage';
         this.shwClient = options.shwClient; // api/shw_client.js实例
         this.captionGenerator = options.captionGenerator || this._dsVisionCaption.bind(this); // DS vision优先
         this.queue = [];

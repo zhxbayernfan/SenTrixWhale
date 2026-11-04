@@ -56,4 +56,4 @@ TO="zhxbayernfan3@qq.com"
 - 频率: 每天
 - 保留: 7天
 - 压缩: gzip
-- 触发: `sudo logrotate -f /home/sscy/lingbot-map/005SenTrixWhale/monitoring/logrotate.conf`
+- 触发: `sudo logrotate -f $SENTRIXWHALE_ROOT/monitoring/logrotate.conf`

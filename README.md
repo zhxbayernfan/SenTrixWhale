@@ -14,9 +14,15 @@ QQ(NapCat) → bridge(对话/护栏/质检) → api(SHW适配器) → SHW 2.0(�
 
 ## 快速开始
 
+### 前置条件
+- SHW 2.0运行于9598端口
+- NapCat已配置(OneBot11协议)
+- Node.js >= 22
+- 本地模型: llama-server(8100端口)或云端DS API
+
+### 启动
 ```bash
-# 前置: SHW 2.0运行于9598端口, NapCat已配置, Node>=22
-cd SenTrixWhale
+source Users_Launch_Route.txt  # 路径配置
 bash scripts/start.sh
 bash scripts/healthcheck.sh
 ```

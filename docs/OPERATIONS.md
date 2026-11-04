@@ -181,7 +181,7 @@ cp bridge/state/daily.json.bak.* bridge/state/daily.json
 bash scripts/stop.sh
 
 # 2. 更新代码
-cd /home/sscy/lingbot-map/005SenTrixWhale
+cd $SENTRIXWHALE_ROOT
 git pull
 
 # 3. 重新部署
