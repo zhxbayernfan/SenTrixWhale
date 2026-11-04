@@ -35,7 +35,9 @@ function loadDaily() {
 function saveDaily() { fs.writeFileSync(DAILY, JSON.stringify(daily)); }
 
 function costOf(u) {
-    // 粗估(谷价): miss 1元/M, hit 0.02元/M, out 4元/M — 峰谷档位后续config化
+    // 本地模型(apiKey为空)免费，云端模型按DS费率计费
+    if (!cfg.ds.apiKey) return 0;  // 本地qwen3.5，零成本
+    // 粗估(谷价): miss 1元/M, hit 0.02元/M, out 4元/M
     const miss = u.prompt_cache_miss_tokens || u.prompt_tokens || 0;
     const hit = u.prompt_cache_hit_tokens || 0;
     return (miss * 1 + hit * 0.02 + (u.completion_tokens || 0) * 4) / 1e6;
@@ -47,7 +49,44 @@ const MEM = path.join(ROOT, 'state', 'memory.json');
 let mem = {};
 try { mem = JSON.parse(fs.readFileSync(MEM, 'utf8')); } catch { mem = {}; }
 function saveMem() { const t = MEM + '.tmp'; fs.writeFileSync(t, JSON.stringify(mem, null, 2)); fs.renameSync(t, MEM); }
+
+// ---------- 对话历史(最近5轮) ----------
+const chatHistory = {};
+const MAX_HISTORY = 5;
+function getHistory(who) {
+    return (chatHistory[who] || []).slice(-MAX_HISTORY);
+}
+function addHistory(who, userText, reply) {
+    if (!chatHistory[who]) chatHistory[who] = [];
+    chatHistory[who].push({ role: 'user', content: userText });
+    chatHistory[who].push({ role: 'assistant', content: reply });
+}
+
 const memText = () => Object.keys(mem).length ? Object.entries(mem).map(([k, v]) => `- ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n') : '(记忆库还空着)';
+// ---------- 全家对话摘要(最近3条/人) ----------
+function familyChatSummary() {
+    try {
+        const CL = path.join(ROOT, 'state', 'chat_log_sentrix.jsonl');
+        if (!fs.existsSync(CL)) return '';
+        const lines = fs.readFileSync(CL, 'utf8').trim().split('\n').filter(l => l.trim());
+        const byUser = {};
+        lines.slice(-50).forEach(l => {
+            try {
+                const d = JSON.parse(l);
+                const who = d.who || 'unknown';
+                if (!byUser[who]) byUser[who] = [];
+                byUser[who].push({ in: d.in, out: (d.out || '').slice(0, 50) });
+            } catch {}
+        });
+        return Object.entries(byUser).map(([qq, msgs]) => {
+            const known = Object.entries(mem).find(([k, v]) => String(v).includes(qq));
+            const name = known ? known[0] : `QQ:${qq}`;
+            const last = msgs.slice(-2).map(m => `"${m.in}" → "${m.out}"`).join('; ');
+            return `- ${name}: ${last}`;
+        }).join('\n');
+    } catch { return ''; }
+}
+
 
 // ---------- 质检桩: 记忆写入时自动生成抽查QA(阶段1: 写入, 评测run阶段3) ----------
 function genCheckQA(key, value) {
@@ -106,23 +145,26 @@ async function think(userText, who) {
     }
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
     const hits = await shwSearch(userText);
+    const famSum = familyChatSummary();
+    const identityNote = memText() ? `\n以下是你认识的家庭成员信息：\n${memText()}` : '';
+    const chatNote = famSum ? `\n最近大家聊过：\n${famSum}` : '';
     let memBlock;
     if (hits && hits.count > 0) {
-        // 自然语言包装: 不甩文件名, 给DS摘要线索
         const firstItem = hits.items[0];
         const timeHint = firstItem?.time ? `${firstItem.time.split(' ')[0]}那天` : '之前';
-        memBlock = `我好像记得一些相关的事情... (${timeHint}的记录)。像朋友一样自然聊聊就好，不用报数字或列清单。如果用户想看具体证据，再说"出示证据"`;
+        memBlock = `我好像记得一些相关的事情... (${timeHint}的记录)`;
     } else {
-        memBlock = memText() ? `我的记忆里有这些：\n${memText()}` : '我的记忆还空着呢，你可以告诉我一些事情呀';
+        memBlock = memText() ? `我认识家里这些人：\n${memText()}\n\n最近大家聊的：\n${famSum || '还没什么人聊过天呢'}` : '我的记忆还空着呢';
     }
 
-    const sys = roleText() + '\n\n' + memBlock + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。适度用emoji(🐳💙✨)，别堆砌。';
+    const sys = roleText() + identityNote + chatNote + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。适度用emoji(🐳💙✨)，别堆砌。';
 
     const r = await fetch(cfg.ds.baseUrl + '/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.ds.apiKey },
         body: JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
             { role: 'system', content: sys },
+            ...getHistory(who),
             { role: 'user', content: userText },
         ] }),
     });
@@ -203,6 +245,7 @@ async function handle(userText, senderId, dest) {
     lastCall = Date.now();
     try {
         const reply = await think(userText, senderId);
+        addHistory(senderId, userText, reply);
         await replyTo(dest, reply, userText);
     } catch (e) {
         log('[错误] ' + e.message);
@@ -212,7 +255,7 @@ async function handle(userText, senderId, dest) {
 async function replyTo(dest, text, userInput) {
     const msg = [{ type: 'text', data: { text } }];
     // 匹配表情包
-    const stickerPath = matchSticker(text, userInput);
+    const stickerPath = null;
     if (stickerPath) {
         msg.push({ type: 'image', data: { file: stickerPath } });
     }
