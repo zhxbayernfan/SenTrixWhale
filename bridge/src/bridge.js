@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const { matchSticker } = require('../stickers');
+const { matchSticker, STICKER_FILES } = require('./stickers_bridge.js');
 const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
 // SenTrixWhale bridge v0.1 — 工程鲸桥接(零依赖, Node>=22)
 // 定位: SHW记忆助手的QQ交互前端 — 对话即记忆输入, 检索即回答, 质检即信任.
@@ -213,8 +213,16 @@ async function think(userText, who) {
     const reply = (m.content || '').trim();
     if (!reply) throw new Error('空content(思考挤占?)');
 
-    // 记录对话到chatLog(工程鲸调试工具,可随意清空)
+    // 记录对话到chatLog
     chatLog({ event: 'chat', who: who, dest: 'private', in: userText, out: reply, usage: u, cost: costOf(u) });
+    
+    // 持久化memory.json（每次对话后保存）
+    try {
+        fs.writeFileSync(MEM + '.tmp', JSON.stringify(mem, null, 2));
+        fs.renameSync(MEM + '.tmp', MEM);
+    } catch (e) {
+        log('[记忆保存失败] ' + e.message);
+    }
 
     return reply;
 }
@@ -291,9 +299,15 @@ async function handle(userText, senderId, dest) {
 async function replyTo(dest, text, userInput) {
     const msg = [{ type: 'text', data: { text } }];
     // 匹配表情包
-    const stickerPath = null;
-    if (stickerPath) {
-        msg.push({ type: 'image', data: { file: stickerPath } });
+    const stickerFile = matchSticker(text, userInput);
+    if (stickerFile) {
+        const stickerPath = path.join(ROOT, 'bridge', 'stickers', stickerFile);
+        if (fs.existsSync(stickerPath)) {
+            // 读取文件并转为base64
+            const b64 = fs.readFileSync(stickerPath).toString('base64');
+            msg.push({ type: 'image', data: { file: 'base64://' + b64 } });
+            log('[表情] 发送: ' + stickerFile);
+        }
     }
     const body = dest.kind === 'group'
         ? { group_id: Number(dest.id), message: msg }
