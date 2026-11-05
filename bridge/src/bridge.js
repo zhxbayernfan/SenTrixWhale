@@ -50,6 +50,11 @@ let mem = {};
 try { mem = JSON.parse(fs.readFileSync(MEM, 'utf8')); } catch { mem = {}; }
 function saveMem() { const t = MEM + '.tmp'; fs.writeFileSync(t, JSON.stringify(mem, null, 2)); fs.renameSync(t, MEM); }
 
+const chatHist={};function getHist(w){return(chatHist[w]||[]).slice(-10)}function addHist(w,u,r){if(!chatHist[w])chatHist[w]=[];chatHist[w].push({role:'user',content:u},{role:'assistant',content:r})}
+let shwStats={total:0};async function fetchSHWStats(){if(!cfg.shw||!cfg.shw.enabled)return;try{const d=await(await fetch(cfg.shw.apiBase+'/api/v1/assets?limit=1000')).json();shwStats.total=(d.items||[]).length;if(d.has_more){const d2=await(await fetch(cfg.shw.apiBase+'/api/v1/assets?limit=1000&offset=1000')).json();shwStats.total+=(d2.items||[]).length}log('[SHW统计] '+shwStats.total)}catch(e){log('[SHW统计] 失败')}}
+function familySum(){try{const CL=path.join(ROOT,'state','chat_log_sentrix.jsonl');if(!fs.existsSync(CL))return'';const byU={};fs.readFileSync(CL,'utf8').trim().split('\n').filter(l=>l.startsWith('{')).slice(-20).forEach(l=>{try{const d=JSON.parse(l),q=String(d.who||'');if(!byU[q])byU[q]=[];if(d.in)byU[q].push(d.in.slice(0,30))}catch(e){}});return Object.entries(byU).map(([q,m])=>{const k=Object.entries(mem).find(([kk])=>kk===q);return'- '+(k?k[0]:q)+': '+m.join('; ')}).join('\n')}catch(e){return''}}
+
+
 // ---------- 对话历史(最近5轮) ----------
 const chatHistory = {};
 const MAX_HISTORY = 5;
@@ -75,7 +80,7 @@ function familyChatSummary() {
                 const d = JSON.parse(l);
                 const who = d.who || 'unknown';
                 if (!byUser[who]) byUser[who] = [];
-                byUser[who].push({ in: d.in, out: (d.out || '').slice(0, 50) });
+                const safeOut = (d.out || '').substring(0, 50); byUser[who].push({ in: d.in, out: safeOut });
             } catch {}
         });
         return Object.entries(byUser).map(([qq, msgs]) => {
@@ -112,7 +117,7 @@ async function shwSearch(query) {
 // ---------- 角色卡加载 ----------
 const roleText = () => {
     try { return fs.readFileSync(path.join(ROOT, cfg.paths.roleCard), 'utf8'); }
-    catch { return '你是SenTrixWhale,一条工程向的鲸鱼——干练务实,但不失活泼(适度用🐳)。'; }
+    catch { return '你是SenTrixWhale,一条有记忆的鲸鱼。'; }
 };
 
 // ---------- 对话骨架: DS API ----------
@@ -138,7 +143,9 @@ const owners = () => (cfg.owners || []).map(String);
 const isKnown = (qq) => owners().includes(String(qq)) || (cfg.friends || []).map(String).includes(String(qq));
 
 async function think(userText, who) {
+    log('[think] 开始处理: ' + userText.slice(0,30) + ' from: ' + who);
     loadDaily();
+    log('[think] 护栏检查: calls=' + daily.calls + ' cost=' + daily.costYuan);
     if (overLimit()) {
         log(`[下沉] 调用${daily.calls}次 花费${daily.costYuan.toFixed(4)}元, 超线拒答`);
         return '今天电量不足, 明天再见 🐳';
@@ -146,7 +153,9 @@ async function think(userText, who) {
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
     const hits = await shwSearch(userText);
     const famSum = familyChatSummary();
-    const identityNote = memText() ? `\n以下是你认识的家庭成员信息：\n${memText()}` : '';
+    // 添加照片统计信息到系统提示
+    const photoData = mem['照片总数'] ? '\n 照片统计：' + mem['照片总数'] + '\n📍 地点：' + (mem['照片地点']||'') + '\n📅 时间：' + (mem['照片时间范围']||'') : '';
+    const identityNote = memText() ? '\n以下是你认识的家庭成员信息：' + photoData + '\n' + memText() : '';
     const chatNote = famSum ? `\n最近大家聊过：\n${famSum}` : '';
     let memBlock;
     if (hits && hits.count > 0) {
@@ -159,16 +168,30 @@ async function think(userText, who) {
 
     const sys = roleText() + identityNote + chatNote + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。适度用emoji(🐳💙✨)，别堆砌。';
 
-    const r = await fetch(cfg.ds.baseUrl + '/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.ds.apiKey },
-        body: JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
+    const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
+            { role: 'user', content: sys + '\n\n---\n\n' + userText },
+        ] });
+    log('[DBG] bodyLen:'+_bodyStr.length+' sysLen:'+sys.length);
+    try{require('fs').writeFileSync('/tmp/llama_body.json',_bodyStr)}catch(e){}
+    const _fetchBody = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
             { role: 'system', content: sys },
             ...getHistory(who),
             { role: 'user', content: userText },
-        ] }),
+        ] });
+    try{require('fs').writeFileSync('/tmp/actual_fetch_body.json', _fetchBody)}catch(e){}
+    log('[FETCH] bodyLen:'+_fetchBody.length+' histLen:'+getHistory(who).length+' histJSON:'+JSON.stringify(getHistory(who)).slice(0,200));
+    log('[think] 准备调用llama: ' + cfg.ds.baseUrl + '/chat/completions');
+    const r = await fetch(cfg.ds.baseUrl + '/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.ds.apiKey },
+        body: _fetchBody,
     });
-    if (!r.ok) throw new Error('DS ' + r.status + ': ' + (await r.text()).slice(0, 150));
+    log('[think] llama响应状态: ' + r.status);
+    if (!r.ok) {
+        const errText = await r.text();
+        log('[think] llama错误: ' + errText.slice(0,200));
+        throw new Error('DS ' + r.status + ': ' + errText.slice(0, 150));
+    }
     const j = await r.json();
     const m = j.choices[0].message;
     if (!(m.content || '').trim()) throw new Error('空content(思考挤占?)');
@@ -214,15 +237,19 @@ function connect() {
     ws.onopen = () => { lastWsData = Date.now(); log('[NapCat] WS已连接'); };
     ws.onmessage = (ev) => {
         lastWsData = Date.now();
+        log('[WS] 收到原始消息: ' + ev.data.toString().slice(0,100));
         try {
             const m = JSON.parse(ev.data);
+            log('[WS] 解析后: post_type=' + m.post_type + ' user_id=' + m.user_id);
             if (m.post_type !== 'message') return;
             const text = (m.message || []).filter(p => p.type === 'text').map(p => p.data.text).join('');
             if ((!text.trim()) || !isKnown(m.user_id)) return;
             const dest = m.message_type === 'group' ? { kind: 'group', id: String(m.group_id), atQQ: m.user_id } : { kind: 'private', id: m.user_id };
             const atMe = (m.message || []).some(p => p.type === 'at' && String(p.data.qq) === String(m.self_id));
             if (m.message_type === 'group' && !atMe) return;
-            handle(text.trim(), m.user_id, dest);
+            const imgs = (m.message || []).filter(p => p.type === 'image').map(p => p.data).slice(0, 3);
+                log('[WS] 准备调用handle: text=' + text.trim().slice(0,30) + ' user=' + m.user_id + ' imgs=' + imgs.length);
+                handle(text.trim(), m.user_id, dest, imgs).catch(e => log('[handle错误] ' + e.message));
         } catch (e) { log('[WS解析] ' + e.message); }
     };
     ws.onclose = () => { log('[NapCat] WS断开, 5s重连'); setTimeout(connect, 5000); };
@@ -273,5 +300,6 @@ async function replyTo(dest, text, userInput) {
 
 // ---------- 启动 ----------
 log("[启动] SenTrixWhale bridge | 护栏=10元/500次 | SHW检索=启用 | 模型=本地");
+fetchSHWStats();
 connect();
 
