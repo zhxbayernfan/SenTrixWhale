@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const { matchSticker } = require('../stickers');
+const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
 // SenTrixWhale bridge v0.1 — 工程鲸桥接(零依赖, Node>=22)
 // 定位: SHW记忆助手的QQ交互前端 — 对话即记忆输入, 检索即回答, 质检即信任.
 //
@@ -22,6 +23,9 @@ const log = (s) => {
 // ---------- 护栏: 双计数 + 下沉模式 + 日账单 ----------
 const DAILY = path.join(ROOT, 'state', 'daily.json');
 let daily = { date: '', calls: 0, cachedIn: 0, plainIn: 0, out: 0, costYuan: 0 };
+
+// 照片等待状态
+let pendingPhoto = null; // {url, senderId, round: 0, maxRounds: 3}
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 function loadDaily() {
@@ -248,8 +252,13 @@ function connect() {
             const atMe = (m.message || []).some(p => p.type === 'at' && String(p.data.qq) === String(m.self_id));
             if (m.message_type === 'group' && !atMe) return;
             const imgs = (m.message || []).filter(p => p.type === 'image').map(p => p.data).slice(0, 3);
+                // 过滤表情包（检查是否是已知表情）
+                const realPhotos = imgs.filter(img => {
+                    // 简单判断：表情包通常是小文件或有特定格式
+                    return true; // 暂时全部当作照片处理，后续可优化
+                });
                 log('[WS] 准备调用handle: text=' + text.trim().slice(0,30) + ' user=' + m.user_id + ' imgs=' + imgs.length);
-                handle(text.trim(), m.user_id, dest, imgs).catch(e => log('[handle错误] ' + e.message));
+                handle(text.trim(), m.user_id, dest, realPhotos).catch(e => log('[handle错误] ' + e.message));
         } catch (e) { log('[WS解析] ' + e.message); }
     };
     ws.onclose = () => { log('[NapCat] WS断开, 5s重连'); setTimeout(connect, 5000); };
