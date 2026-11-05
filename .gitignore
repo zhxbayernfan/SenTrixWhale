@@ -4,3 +4,22 @@ node_modules/
 napcat-data/
 napcat3/
 config.json
+
+# 媒体文件
+media/photos/
+media/exif/
+*.jpg
+*.png
+*.webp
+
+# 状态文件
+state/chat_log*.jsonl
+state/history*.json
+state/daily.json
+state/memory.json
+state/diary/
+state/qa_log.jsonl
+
+# 临时文件
+/tmp/*.json
+
