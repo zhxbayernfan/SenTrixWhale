@@ -63,7 +63,8 @@ function familySum(){try{const CL=path.join(ROOT,'state','chat_log_sentrix.jsonl
 const chatHistory = {};
 const MAX_HISTORY = 5;
 function getHistory(who) {
-    return (chatHistory[who] || []).slice(-MAX_HISTORY);
+    // 返回空数组，避免历史混淆
+    return [];
 }
 function addHistory(who, userText, reply) {
     if (!chatHistory[who]) chatHistory[who] = [];
@@ -146,19 +147,28 @@ const chatLog = (obj) => {
 const owners = () => (cfg.owners || []).map(String);
 const isKnown = (qq) => owners().includes(String(qq)) || (cfg.friends || []).map(String).includes(String(qq));
 
+function filterSurrogates(str) {
+    if (!str) return '';
+    // 移除所有surrogate字符和emoji
+    return str.replace(/[\ud800-\udfff]/g, '')
+              .replace(/[^\u0000-\u007F\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/g, '');
+}
+
 async function think(userText, who) {
     log('[think] 开始处理: ' + userText.slice(0,30) + ' from: ' + who);
     loadDaily();
+    // 过滤输入中的surrogate字符
+    userText = filterSurrogates(userText);
     log('[think] 护栏检查: calls=' + daily.calls + ' cost=' + daily.costYuan);
     if (overLimit()) {
         log(`[下沉] 调用${daily.calls}次 花费${daily.costYuan.toFixed(4)}元, 超线拒答`);
-        return '今天电量不足, 明天再见 🐳';
+        return '今天电量不足, 明天再见 [whale]';
     }
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
     const hits = await shwSearch(userText);
     const famSum = familyChatSummary();
     // 添加照片统计信息到系统提示
-    const photoData = mem['照片总数'] ? '\n 照片统计：' + mem['照片总数'] + '\n📍 地点：' + (mem['照片地点']||'') + '\n📅 时间：' + (mem['照片时间范围']||'') : '';
+    const photoData = mem['照片总数'] ? '\n 照片统计：' + mem['照片总数'] + '\n 地点：' + (mem['照片地点']||'') + '\n 时间：' + (mem['照片时间范围']||'') : '';
     const identityNote = memText() ? '\n以下是你认识的家庭成员信息：' + photoData + '\n' + memText() : '';
     const chatNote = famSum ? `\n最近大家聊过：\n${famSum}` : '';
     let memBlock;
@@ -170,17 +180,24 @@ async function think(userText, who) {
         memBlock = memText() ? `我认识家里这些人：\n${memText()}\n\n最近大家聊的：\n${famSum || '还没什么人聊过天呢'}` : '我的记忆还空着呢';
     }
 
-    const sys = roleText() + identityNote + chatNote + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。适度用emoji(🐳💙✨)，别堆砌。';
+    let sys = roleText() + identityNote + chatNote + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
+    sys = filterSurrogates(sys);
 
     const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
             { role: 'user', content: sys + '\n\n---\n\n' + userText },
         ] });
     log('[DBG] bodyLen:'+_bodyStr.length+' sysLen:'+sys.length);
     try{require('fs').writeFileSync('/tmp/llama_body.json',_bodyStr)}catch(e){}
+    // 再次确保所有message content都清理过
+    const cleanHistory = getHistory(who).map(h => ({
+        role: h.role,
+        content: cleanText(h.content)
+    }));
+    
     const _fetchBody = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
-            { role: 'system', content: sys },
-            ...getHistory(who),
-            { role: 'user', content: userText },
+            { role: 'system', content: cleanText(sys) },
+            ...cleanHistory,
+            { role: 'user', content: cleanText(userText) },
         ] });
     try{require('fs').writeFileSync('/tmp/actual_fetch_body.json', _fetchBody)}catch(e){}
     log('[FETCH] bodyLen:'+_fetchBody.length+' histLen:'+getHistory(who).length+' histJSON:'+JSON.stringify(getHistory(who)).slice(0,200));
@@ -201,6 +218,8 @@ async function think(userText, who) {
     if (!(m.content || '').trim()) throw new Error('空content(思考挤占?)');
 
     loadDaily();
+    // 过滤输入中的surrogate字符
+    userText = filterSurrogates(userText);
     const u = j.usage || {};
     daily.calls += 1;
     daily.cachedIn += u.prompt_cache_hit_tokens || 0;
@@ -210,7 +229,9 @@ async function think(userText, who) {
     saveDaily();
     log(`[对话] 入${u.prompt_tokens || 0}(缓${u.prompt_cache_hit_tokens || 0}) 出${u.completion_tokens || 0} 累计${daily.costYuan.toFixed(4)}元`);
 
-    const reply = (m.content || '').trim();
+    let reply = (m.content || '').trim();
+    // 过滤emoji
+    reply = reply.replace(/[\ud800-\udfff]/g, '');
     if (!reply) throw new Error('空content(思考挤占?)');
 
     // 记录对话到chatLog
@@ -260,13 +281,8 @@ function connect() {
             const atMe = (m.message || []).some(p => p.type === 'at' && String(p.data.qq) === String(m.self_id));
             if (m.message_type === 'group' && !atMe) return;
             const imgs = (m.message || []).filter(p => p.type === 'image').map(p => p.data).slice(0, 3);
-                // 过滤表情包（检查是否是已知表情）
-                const realPhotos = imgs.filter(img => {
-                    // 简单判断：表情包通常是小文件或有特定格式
-                    return true; // 暂时全部当作照片处理，后续可优化
-                });
-                log('[WS] 准备调用handle: text=' + text.trim().slice(0,30) + ' user=' + m.user_id + ' imgs=' + imgs.length);
-                handle(text.trim(), m.user_id, dest, realPhotos).catch(e => log('[handle错误] ' + e.message));
+            log('[WS] 准备调用handle: text=' + text.trim().slice(0,30) + ' user=' + m.user_id + ' imgs=' + imgs.length);
+            handle(text.trim(), m.user_id, dest, imgs).catch(e => log('[handle错误] ' + e.message));
         } catch (e) { log('[WS解析] ' + e.message); }
     };
     ws.onclose = () => { log('[NapCat] WS断开, 5s重连'); setTimeout(connect, 5000); };
@@ -279,9 +295,52 @@ setInterval(() => {
 
 // ---------- 主处理 ----------
 let lastCall = 0;
-async function handle(userText, senderId, dest) {
+async function handle(userText, senderId, dest, imgs) {
+    // 处理照片接收
+    if (imgs && imgs.length > 0) {
+        const imgUrl = imgs[0].url || imgs[0].file || '';
+        if (imgUrl && !imgUrl.includes('sticker')) {
+            log('[handle] 收到照片');
+            pendingPhoto = { url: imgUrl, senderId, dest, round: 0, maxRounds: 3 };
+            await replyTo(dest, '收到照片啦 这是在哪里拍的呢？告诉我城市就好～', userText);
+            return;
+        }
+    }
+    
+    // 检查是否在等待照片地点
+    if (pendingPhoto && pendingPhoto.senderId === senderId) {
+        pendingPhoto.round++;
+        const locationMatch = userText.match(/在(.{1,10}?)(市|省|区|县|家里|学校|公司)?/);
+        
+        if (locationMatch || pendingPhoto.round > pendingPhoto.maxRounds) {
+            if (locationMatch) {
+                try {
+                    const result = await savePhoto(pendingPhoto.url, {
+                        city: locationMatch[1],
+                        description: userText
+                    }, userText);
+                    if (result.success) {
+                        await replyTo(dest, `照片存好啦 地点记作${result.coords.locationName}～`, userText);
+                    } else {
+                        await replyTo(dest, '照片保存失败了呢', userText);
+                    }
+                } catch(e) {
+                    await replyTo(dest, '照片处理出错了', userText);
+                }
+            } else {
+                await replyTo(dest, '这张图没能存入系统呢 下次记得告诉我地点哦～', userText);
+            }
+            pendingPhoto = null;
+            return;
+        } else {
+            const remaining = pendingPhoto.maxRounds - pendingPhoto.round;
+            await replyTo(dest, `还没告诉我地点呢～再不说这张图就存不进去啦（还剩${remaining}次机会）`, userText);
+            return;
+        }
+    }
+    
     if (tryMemoryWrite(userText)) {
-        await replyTo(dest, '记住了 🐳 已入库并生成抽查问答。');
+        await replyTo(dest, '记住了 [whale] 已入库并生成抽查问答。');
         return;
     }
     const gap = (Date.now() - lastCall) / 1000;
