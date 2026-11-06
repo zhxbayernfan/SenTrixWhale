@@ -23,3 +23,7 @@ state/qa_log.jsonl
 # 临时文件
 /tmp/*.json
 
+
+# 表情包
+bridge/stickers/
+*.webp
