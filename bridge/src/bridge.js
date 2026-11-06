@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const { matchSticker, STICKER_FILES } = require('../stickers_bridge.js');
+const { matchSticker, resolveSticker, takeRoundTicket, resetStickerRound } = require('../stickers_bridge.js');
 const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
 // SenTrixWhale bridge v0.1 — 工程鲸桥接(零依赖, Node>=22)
 // 定位: SHW记忆助手的QQ交互前端 — 对话即记忆输入, 检索即回答, 质检即信任.
@@ -22,6 +22,10 @@ const ROOT = process.env.WHALE_HOME || path.join(__dirname, '..', '..');
 const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 const LOG = path.join(ROOT, 'state', 'bridge.log');
 fs.mkdirSync(path.join(ROOT, 'state'), { recursive: true });
+
+// 进程级兜底: 未捕获异常只记日志不退出
+process.on('uncaughtException', (e) => { try { fs.appendFileSync(LOG, new Date().toISOString() + ' [uncaught] ' + (e.stack || e.message) + '\n'); } catch {} });
+process.on('unhandledRejection', (e) => { try { fs.appendFileSync(LOG, new Date().toISOString() + ' [unhandledRejection] ' + ((e && e.stack) || String(e)) + '\n'); } catch {} });
 
 const log = (s) => {
     const d = new Date(); const p2 = (n) => String(n).padStart(2, '0');
@@ -243,7 +247,7 @@ async function think(userText, who) {
     if (!reply) throw new Error('空content(思考挤占?)');
 
     // 记录对话到chatLog
-    chatLog({ event: 'chat', who: who, dest: 'private', in: userText, out: reply, usage: u, cost: costOf(u) });
+    chatLog({ event: 'chat', who: who, in: userText, dest: 'private', in: userText, out: reply, usage: u, cost: costOf(u) });
     
     // 持久化memory.json（每次对话后保存）
     try {
@@ -360,7 +364,7 @@ async function handle(userText, senderId, dest, imgs) {
     // 检查是否在等待照片地点
     if (pendingPhoto && pendingPhoto.senderId === senderId) {
         pendingPhoto.round++;
-        const locationMatch = userText.match(/(在)?([一-龥]{1,10}?)(市|省|区|县|家里|学校|公司|地方)?/);
+        const locationMatch = userText.match(/(在)?([一-龥]{2,10}?(?:市|省|区|县)?|家里|学校|公司)/);
         
         if (locationMatch || pendingPhoto.round > pendingPhoto.maxRounds) {
             if (locationMatch) {
@@ -407,6 +411,29 @@ async function handle(userText, senderId, dest, imgs) {
         await replyTo(dest, '处理出错了, 请稍后再试。');
     }
 }
+// 发送节奏: 私聊按句分条,群聊整条发
+async function sendHumanPaced(reply, dest) {
+    if (dest.kind === 'group') {
+        const body = { group_id: Number(dest.id), message: [{ type: 'text', data: { text: reply } }] };
+        await fetch(cfg.napcat.httpUrl + '/send_group_msg', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.napcat.accessToken },
+            body: JSON.stringify(body),
+        });
+        return;
+    }
+    const chunks = reply.split(/(?<=[。!？!？~\n])/).map(s => s.trim()).filter(Boolean);
+    for (let i = 0; i < chunks.length; ++i) {
+        const body = { user_id: Number(dest.id), message: [{ type: 'text', data: { text: chunks[i] } }] };
+        await fetch(cfg.napcat.httpUrl + '/send_private_msg', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.napcat.accessToken },
+            body: JSON.stringify(body),
+        });
+        if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 1500 + Math.random() * 1500));
+    }
+}
+
 async function replyTo(dest, text, userInput) {
     const msg = [{ type: 'text', data: { text } }];
     // 匹配表情包

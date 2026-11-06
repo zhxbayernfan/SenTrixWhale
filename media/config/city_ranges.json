@@ -1,15 +1,111 @@
 {
+  "北京": {
+    "lat_min": 39.4,
+    "lat_max": 41.0,
+    "lon_min": 115.4,
+    "lon_max": 117.5
+  },
+  "上海": {
+    "lat_min": 30.6,
+    "lat_max": 31.9,
+    "lon_min": 120.8,
+    "lon_max": 122.0
+  },
+  "天津": {
+    "lat_min": 38.5,
+    "lat_max": 40.2,
+    "lon_min": 116.7,
+    "lon_max": 118.0
+  },
+  "重庆": {
+    "lat_min": 28.1,
+    "lat_max": 32.2,
+    "lon_min": 105.3,
+    "lon_max": 110.2
+  },
   "杭州": {
-    "lat_min": 30.0,
-    "lat_max": 30.4,
-    "lon_min": 120.0,
+    "lat_min": 29.9,
+    "lat_max": 30.5,
+    "lon_min": 119.8,
     "lon_max": 120.6
   },
-  "深圳": {
-    "lat_min": 22.4,
-    "lat_max": 22.8,
-    "lon_min": 113.8,
-    "lon_max": 114.3
+  "南京": {
+    "lat_min": 31.5,
+    "lat_max": 32.5,
+    "lon_min": 118.3,
+    "lon_max": 119.3
+  },
+  "合肥": {
+    "lat_min": 31.5,
+    "lat_max": 32.1,
+    "lon_min": 117.0,
+    "lon_max": 117.5
+  },
+  "福州": {
+    "lat_min": 25.8,
+    "lat_max": 26.2,
+    "lon_min": 119.0,
+    "lon_max": 119.5
+  },
+  "南昌": {
+    "lat_min": 28.5,
+    "lat_max": 29.0,
+    "lon_min": 115.7,
+    "lon_max": 116.1
+  },
+  "济南": {
+    "lat_min": 36.5,
+    "lat_max": 37.0,
+    "lon_min": 116.8,
+    "lon_max": 117.3
+  },
+  "郑州": {
+    "lat_min": 34.5,
+    "lat_max": 35.0,
+    "lon_min": 113.3,
+    "lon_max": 113.8
+  },
+  "武汉": {
+    "lat_min": 30.3,
+    "lat_max": 30.8,
+    "lon_min": 114.0,
+    "lon_max": 114.6
+  },
+  "长沙": {
+    "lat_min": 27.9,
+    "lat_max": 28.4,
+    "lon_min": 112.8,
+    "lon_max": 113.2
+  },
+  "石家庄": {
+    "lat_min": 37.8,
+    "lat_max": 38.2,
+    "lon_min": 114.3,
+    "lon_max": 114.7
+  },
+  "太原": {
+    "lat_min": 37.5,
+    "lat_max": 38.0,
+    "lon_min": 112.3,
+    "lon_max": 112.8
+  },
+  "沈阳": {
+    "lat_min": 41.5,
+    "lat_max": 42.0,
+    "lon_min": 123.2,
+    "lon_max": 123.8
+  },
+  "长春": {
+    "lat_min": 43.5,
+    "lat_max": 44.2,
+    "lon_min": 125.0,
+    "lon_max": 125.6
+  },
+  "哈尔滨": {
+    "lat_min": 45.5,
+    "lat_max": 46.0,
+    "lon_min": 126.3,
+    "lon_max": 126.9
   },
   "西安": {
     "lat_min": 34.0,
@@ -17,16 +113,208 @@
     "lon_min": 108.5,
     "lon_max": 109.2
   },
+  "兰州": {
+    "lat_min": 35.9,
+    "lat_max": 36.3,
+    "lon_min": 103.5,
+    "lon_max": 104.0
+  },
+  "西宁": {
+    "lat_min": 36.5,
+    "lat_max": 36.8,
+    "lon_min": 101.6,
+    "lon_max": 102.0
+  },
+  "成都": {
+    "lat_min": 30.4,
+    "lat_max": 30.8,
+    "lon_min": 103.9,
+    "lon_max": 104.3
+  },
+  "贵阳": {
+    "lat_min": 26.4,
+    "lat_max": 26.8,
+    "lon_min": 106.5,
+    "lon_max": 106.9
+  },
+  "昆明": {
+    "lat_min": 24.8,
+    "lat_max": 25.2,
+    "lon_min": 102.6,
+    "lon_max": 103.0
+  },
+  "南宁": {
+    "lat_min": 22.7,
+    "lat_max": 23.0,
+    "lon_min": 108.2,
+    "lon_max": 108.5
+  },
+  "拉萨": {
+    "lat_min": 29.5,
+    "lat_max": 29.8,
+    "lon_min": 91.0,
+    "lon_max": 91.3
+  },
+  "银川": {
+    "lat_min": 38.2,
+    "lat_max": 38.6,
+    "lon_min": 106.0,
+    "lon_max": 106.4
+  },
+  "乌鲁木齐": {
+    "lat_min": 43.6,
+    "lat_max": 44.0,
+    "lon_min": 87.4,
+    "lon_max": 87.8
+  },
+  "呼和浩特": {
+    "lat_min": 40.7,
+    "lat_max": 41.0,
+    "lon_min": 111.5,
+    "lon_max": 111.9
+  },
+  "香港": {
+    "lat_min": 22.1,
+    "lat_max": 22.5,
+    "lon_min": 113.8,
+    "lon_max": 114.3
+  },
+  "澳门": {
+    "lat_min": 22.1,
+    "lat_max": 22.2,
+    "lon_min": 113.5,
+    "lon_max": 113.6
+  },
+  "台北": {
+    "lat_min": 24.9,
+    "lat_max": 25.2,
+    "lon_min": 121.4,
+    "lon_max": 121.7
+  },
   "广州": {
     "lat_min": 23.0,
     "lat_max": 23.3,
     "lon_min": 113.1,
     "lon_max": 113.6
   },
-  "济南": {
-    "lat_min": 36.5,
-    "lat_max": 36.8,
-    "lon_min": 116.8,
-    "lon_max": 117.3
+  "深圳": {
+    "lat_min": 22.4,
+    "lat_max": 22.8,
+    "lon_min": 113.8,
+    "lon_max": 114.3
+  },
+  "珠海": {
+    "lat_min": 21.9,
+    "lat_max": 22.3,
+    "lon_min": 113.3,
+    "lon_max": 113.7
+  },
+  "汕头": {
+    "lat_min": 23.2,
+    "lat_max": 23.5,
+    "lon_min": 116.5,
+    "lon_max": 116.9
+  },
+  "佛山": {
+    "lat_min": 22.9,
+    "lat_max": 23.2,
+    "lon_min": 113.0,
+    "lon_max": 113.3
+  },
+  "韶关": {
+    "lat_min": 24.7,
+    "lat_max": 25.0,
+    "lon_min": 113.5,
+    "lon_max": 113.9
+  },
+  "湛江": {
+    "lat_min": 20.9,
+    "lat_max": 21.3,
+    "lon_min": 110.2,
+    "lon_max": 110.6
+  },
+  "肇庆": {
+    "lat_min": 23.0,
+    "lat_max": 23.3,
+    "lon_min": 112.3,
+    "lon_max": 112.7
+  },
+  "江门": {
+    "lat_min": 22.4,
+    "lat_max": 22.7,
+    "lon_min": 112.8,
+    "lon_max": 113.2
+  },
+  "茂名": {
+    "lat_min": 21.6,
+    "lat_max": 22.0,
+    "lon_min": 110.8,
+    "lon_max": 111.2
+  },
+  "惠州": {
+    "lat_min": 22.9,
+    "lat_max": 23.2,
+    "lon_min": 114.3,
+    "lon_max": 114.7
+  },
+  "梅州": {
+    "lat_min": 24.1,
+    "lat_max": 24.5,
+    "lon_min": 116.0,
+    "lon_max": 116.4
+  },
+  "汕尾": {
+    "lat_min": 22.7,
+    "lat_max": 23.0,
+    "lon_min": 115.3,
+    "lon_max": 115.6
+  },
+  "河源": {
+    "lat_min": 23.6,
+    "lat_max": 24.0,
+    "lon_min": 114.6,
+    "lon_max": 115.0
+  },
+  "阳江": {
+    "lat_min": 21.7,
+    "lat_max": 22.0,
+    "lon_min": 111.8,
+    "lon_max": 112.1
+  },
+  "清远": {
+    "lat_min": 23.5,
+    "lat_max": 24.0,
+    "lon_min": 112.9,
+    "lon_max": 113.3
+  },
+  "东莞": {
+    "lat_min": 22.9,
+    "lat_max": 23.2,
+    "lon_min": 113.7,
+    "lon_max": 114.0
+  },
+  "中山": {
+    "lat_min": 22.4,
+    "lat_max": 22.6,
+    "lon_min": 113.3,
+    "lon_max": 113.5
+  },
+  "潮州": {
+    "lat_min": 23.6,
+    "lat_max": 23.8,
+    "lon_min": 116.5,
+    "lon_max": 116.7
+  },
+  "揭阳": {
+    "lat_min": 23.4,
+    "lat_max": 23.7,
+    "lon_min": 116.2,
+    "lon_max": 116.5
+  },
+  "云浮": {
+    "lat_min": 22.8,
+    "lat_max": 23.1,
+    "lon_min": 112.0,
+    "lon_max": 112.3
   }
 }

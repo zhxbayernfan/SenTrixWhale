@@ -12,6 +12,17 @@ const CONFIG_DIR = path.join(ROOT, 'media', 'config');
 let fixedLocations = {};
 let cityRanges = {};
 
+// 加载城市坐标映射
+try {
+    const cityCoordsPath = path.join(CONFIG_DIR, 'city_coords.json');
+    if (fs.existsSync(cityCoordsPath)) {
+        cityRanges = JSON.parse(fs.readFileSync(cityCoordsPath, 'utf8'));
+        console.log(`[Photo] 加载了 ${Object.keys(cityRanges).length} 个城市坐标`);
+    }
+} catch (e) {
+    console.error('[Photo] 加载城市坐标失败:', e.message);
+}
+
 try {
     fixedLocations = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'fixed_locations.json'), 'utf8'));
     cityRanges = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'city_ranges.json'), 'utf8'));
@@ -27,22 +38,19 @@ fs.mkdirSync(EXIF_DIR, { recursive: true });
 function randomCoord(city, district) {
     const range = cityRanges[city];
     if (!range) {
-        // 默认范围（杭州）
-        return { lat: 30.0415, lon: 120.5363 };
+        // 未知城市，使用默认范围（杭州）
+        console.log('[Photo] 未知城市: ' + city + '，使用默认坐标');
+        return { lat: 30.0415, lon: 120.5363, locationName: city || '未知地点' };
     }
     
     // 在城市范围内随机
     const lat = range.lat_min + Math.random() * (range.lat_max - range.lat_min);
     const lon = range.lon_min + Math.random() * (range.lon_max - range.lon_min);
     
-    // 如果有区，进一步缩小范围（简化处理）
-    if (district) {
-        // 可以添加更精细的区级坐标范围
-    }
-    
     return {
         lat: Math.round(lat * 10000) / 10000,
-        lon: Math.round(lon * 10000) / 10000
+        lon: Math.round(lon * 10000) / 10000,
+        locationName: city
     };
 }
 
@@ -112,4 +120,79 @@ async function savePhoto(imageUrl, locationInfo, description) {
     }
 }
 
-module.exports = { savePhoto, randomCoord, checkFixedLocation, fixedLocations, cityRanges };
+
+// ---------- 照片检索功能 ----------
+// 根据关键词检索照片（时间、地点、描述）
+async function searchPhotos(query) {
+    try {
+        const exifPath = path.join(ROOT, 'media', 'exif', 'Exif_MetaData.json');
+        if (!fs.existsSync(exifPath)) {
+            return { success: false, error: 'EXIF数据不存在' };
+        }
+        
+        const exifData = JSON.parse(fs.readFileSync(exifPath, 'utf8'));
+        const queryLower = query.toLowerCase();
+        
+        // 匹配逻辑：
+        // 1. 地点匹配
+        // 2. 时间匹配（年份、月份）
+        // 3. 帧ID匹配
+        
+        const results = [];
+        for (const [frameId, info] of Object.entries(exifData)) {
+            let match = false;
+            let matchType = '';
+            
+            // 地点匹配
+            const city = getCityFromCoords(info.latitude, info.longitude);
+            if (city && query.includes(city)) {
+                match = true;
+                matchType = '地点';
+            }
+            
+            // 时间匹配
+            if (info.time) {
+                const year = info.time.split('-')[0];
+                const month = info.time.split('-')[1];
+                if (query.includes(year) || query.includes(month)) {
+                    match = true;
+                    matchType = matchType ? matchType + '+时间' : '时间';
+                }
+            }
+            
+            if (match) {
+                results.push({
+                    frameId,
+                    time: info.time,
+                    city,
+                    lat: info.latitude,
+                    lon: info.longitude,
+                    matchType
+                });
+            }
+        }
+        
+        return {
+            success: true,
+            count: results.length,
+            photos: results.slice(0, 10) // 最多返回10张
+        };
+    } catch (e) {
+        console.error('[Photo Search] 错误:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+// 根据坐标获取城市名（使用精确城市范围）
+function getCityFromCoords(lat, lon) {
+    for (const [city, range] of Object.entries(cityRanges)) {
+        if (range.lat_min <= lat <= range.lat_max && 
+            range.lon_min <= lon <= range.lon_max) {
+            return city;
+        }
+    }
+    return null;
+}
+
+module.exports = { savePhoto, randomCoord, checkFixedLocation, searchPhotos, fixedLocations, cityRanges };
+
