@@ -88,15 +88,16 @@ async function savePhoto(imageUrl, locationInfo, description) {
             coords = { lat: fixed.lat, lon: fixed.lon, isFixed: true, locationName: fixed.desc };
         } else {
             const random = randomCoord(locationInfo.city, locationInfo.district);
-            coords = { ...random, isFixed: false, locationName: locationInfo.description || locationInfo.city };
+            coords = { ...random, isFixed: false, locationName: locationInfo.city || '未知地点' };
         }
         
-        // 保存EXIF
+        // 保存EXIF（分离地点和时间）
         const exifData = {
             photoId,
             fileName,
-            time: new Date().toISOString(),
-            location: locationInfo.city || '未知',
+            uploadTime: new Date().toISOString(),
+            location: locationInfo.city || '未知地点',
+            time: locationInfo.time || '',  // 用户提供的拍摄时间
             district: locationInfo.district || '',
             description: description || '',
             lat: coords.lat,
@@ -196,3 +197,44 @@ function getCityFromCoords(lat, lon) {
 
 module.exports = { savePhoto, randomCoord, checkFixedLocation, searchPhotos, fixedLocations, cityRanges };
 
+
+// ---------- 删除同步功能（问题1修复） ----------
+async function deletePhoto(photoId) {
+    try {
+        const photoPath = path.join(PHOTO_DIR, `photo_${photoId}.jpg`);
+        const exifPath = path.join(EXIF_DIR, `${photoId}.json`);
+        
+        // 删除照片文件
+        if (fs.existsSync(photoPath)) {
+            fs.unlinkSync(photoPath);
+            console.log(`[Photo] 删除照片: ${photoPath}`);
+        }
+        
+        // 删除EXIF记录
+        if (fs.existsSync(exifPath)) {
+            fs.unlinkSync(exifPath);
+            console.log(`[Photo] 删除EXIF: ${exifPath}`);
+        }
+        
+        // 从Exif_MetaData.json中移除记录（如果存在）
+        const metaDataPath = path.join(EXIF_DIR, 'Exif_MetaData.json');
+        if (fs.existsSync(metaDataPath)) {
+            const metaData = JSON.parse(fs.readFileSync(metaDataPath, 'utf8'));
+            const frameKey = Object.keys(metaData).find(k => metaData[k].photoId === photoId);
+            if (frameKey) {
+                delete metaData[frameKey];
+                fs.writeFileSync(metaDataPath, JSON.stringify(metaData, null, 2));
+                console.log(`[Photo] 从MetaData移除: ${frameKey}`);
+            }
+        }
+        
+        return { success: true };
+    } catch (e) {
+        console.error('[Photo Delete] 错误:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+// 更新module.exports
+const originalExports = module.exports;
+module.exports = { ...originalExports, deletePhoto };

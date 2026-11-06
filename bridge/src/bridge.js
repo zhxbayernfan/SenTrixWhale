@@ -247,7 +247,7 @@ async function think(userText, who) {
     if (!reply) throw new Error('空content(思考挤占?)');
 
     // 记录对话到chatLog
-    chatLog({ event: 'chat', who: who, in: userText, dest: 'private', in: userText, out: reply, usage: u, cost: costOf(u) });
+    chatLog({ event: 'chat', who: who, dest: 'private', in: userText, out: reply, usage: u, cost: costOf(u) });
     
     // 持久化memory.json（每次对话后保存）
     try {
@@ -272,18 +272,20 @@ function tryMemoryWrite(userText) {
     return true;
 }
 
-// ---------- 照片计数功能 ----------
+// ---------- 照片计数功能（实时读取目录） ----------
 async function countPhotos() {
     try {
         const photoDir = path.join(ROOT, 'media', 'photos');
         if (fs.existsSync(photoDir)) {
-            const photos = fs.readdirSync(photoDir).filter(f => f.endsWith('.jpg'));
-            return photos.length;
+            const allPhotos = fs.readdirSync(photoDir).filter(f => f.endsWith('.jpg'));
+            const newPhotos = allPhotos.filter(f => f.startsWith('photo_'));
+            const framePhotos = allPhotos.filter(f => f.startsWith('frame'));
+            return { total: allPhotos.length, new: newPhotos.length, frames: framePhotos.length };
         }
-        return 52;
+        return { total: 0, new: 0, frames: 0 };
     } catch (e) {
         log('[countPhotos错误] ' + e.message);
-        return 52;
+        return { total: 0, new: 0, frames: 0 };
     }
 }
 
@@ -339,6 +341,12 @@ setInterval(() => {
 // ---------- 主处理 ----------
 let lastCall = 0;
 async function handle(userText, senderId, dest, imgs) {
+    // 明确身份识别：从config.json的owners获取
+    const currentUserQQ = String(senderId);
+    const owners = cfg.owners || [];
+    const ownerIndex = owners.indexOf(Number(currentUserQQ));
+    const currentUserName = ownerIndex === 0 ? 'zhx1' : (ownerIndex === 1 ? 'zhx2' : '新朋友');
+    const userRole = ownerIndex === 0 ? '哥哥' : (ownerIndex === 1 ? '弟弟' : '朋友');
     // 处理照片计数查询
     if (userText.includes('几张') || userText.includes('多少张') || userText.includes('照片数量')) {
         const count = await countPhotos();
@@ -364,13 +372,25 @@ async function handle(userText, senderId, dest, imgs) {
     // 检查是否在等待照片地点
     if (pendingPhoto && pendingPhoto.senderId === senderId) {
         pendingPhoto.round++;
+        // 分离地点和时间信息
         const locationMatch = userText.match(/(在)?([一-龥]{2,10}?(?:市|省|区|县)?|家里|学校|公司)/);
+        const timeMatch = userText.match(/(\d{4}年\d{1,2}月\d{1,2}号?|\d{4}年\d{1,2}月|\d{1,2}月\d{1,2}号?|昨天|前天|上周|上个月|去年|今年|\d{4}年)/);
         
-        if (locationMatch || pendingPhoto.round > pendingPhoto.maxRounds) {
-            if (locationMatch) {
+        let location = '';
+        let timeInfo = '';
+        if (locationMatch) {
+            location = locationMatch[2] || locationMatch[1];
+        }
+        if (timeMatch) {
+            timeInfo = timeMatch[1];
+        }
+        
+        if ((locationMatch || timeMatch) || pendingPhoto.round > pendingPhoto.maxRounds) {
+            if (locationMatch || timeMatch) {
                 try {
                     const result = await savePhoto(pendingPhoto.url, {
-                        city: locationMatch[2] || locationMatch[1],
+                        city: location || '未知地点',
+                        time: timeInfo || '',
                         description: userText
                     }, userText);
                     if (result.success) {
