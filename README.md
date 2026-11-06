@@ -5,7 +5,7 @@
 ## 架构
 
 ```
-QQ(NapCat) → bridge(对话/护栏/质检) → api(SHW适配器) → SHW 2.0(记忆大坝)
+QQ(NapCat) → bridge(对话/护栏/质检) → api(SHW适配器) → SHW 2.0
                   ↑                    ↑
               media(入库管线)     storage(本地缓存)
 ```
