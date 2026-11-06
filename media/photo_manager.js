@@ -48,8 +48,10 @@ function randomCoord(city, district) {
 
 // 检查是否是固定地点
 function checkFixedLocation(description) {
+    // 只匹配完整的固定地点名称，不匹配城市名
+    // 例如：必须说深圳学校或杭州家，只说深圳或杭州不匹配
     for (const [name, coords] of Object.entries(fixedLocations)) {
-        if (description.includes(name) || description.includes(coords.city)) {
+        if (description.includes(name)) {
             return { ...coords, isFixed: true };
         }
     }
