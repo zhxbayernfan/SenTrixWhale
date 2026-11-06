@@ -191,13 +191,13 @@ async function think(userText, who) {
     // 再次确保所有message content都清理过
     const cleanHistory = getHistory(who).map(h => ({
         role: h.role,
-        content: cleanText(h.content)
+        content: filterSurrogates(h.content)
     }));
     
     const _fetchBody = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
-            { role: 'system', content: cleanText(sys) },
+            { role: 'system', content: filterSurrogates(sys) },
             ...cleanHistory,
-            { role: 'user', content: cleanText(userText) },
+            { role: 'user', content: filterSurrogates(userText) },
         ] });
     try{require('fs').writeFileSync('/tmp/actual_fetch_body.json', _fetchBody)}catch(e){}
     log('[FETCH] bodyLen:'+_fetchBody.length+' histLen:'+getHistory(who).length+' histJSON:'+JSON.stringify(getHistory(who)).slice(0,200));
@@ -375,6 +375,8 @@ async function handle(userText, senderId, dest, imgs) {
         await replyTo(dest, reply, userText);
     } catch (e) {
         log('[错误] ' + e.message);
+        // 错误回复也记录chatLog
+        chatLog({ event: 'chat', who: senderId, dest: 'private', in: userText, out: '处理出错了, 请稍后再试。', error: e.message });
         await replyTo(dest, '处理出错了, 请稍后再试。');
     }
 }
