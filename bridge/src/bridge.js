@@ -55,7 +55,7 @@ try { mem = JSON.parse(fs.readFileSync(MEM, 'utf8')); } catch { mem = {}; }
 function saveMem() { const t = MEM + '.tmp'; fs.writeFileSync(t, JSON.stringify(mem, null, 2)); fs.renameSync(t, MEM); }
 
 const chatHist={};function getHist(w){return(chatHist[w]||[]).slice(-10)}function addHist(w,u,r){if(!chatHist[w])chatHist[w]=[];chatHist[w].push({role:'user',content:u},{role:'assistant',content:r})}
-let shwStats={total:0};async function fetchSHWStats(){if(!cfg.shw||!cfg.shw.enabled)return;try{const d=await(await fetch(cfg.shw.apiBase+'/api/v1/search?q=frame00&top_k=100')).json();shwStats.total=(d.items||[]).length;log('[SHW统计] '+shwStats.total)}catch(e){log('[SHW统计] 失败')}}
+let shwStats={total:0};async function fetchSHWStats(){if(!cfg.shw||!cfg.shw.enabled)return;try{const d=await(await fetch(cfg.shw.apiBase+'/api/v1/assets?limit=1000')).json();shwStats.total=(d.items||[]).length;if(d.has_more){const d2=await(await fetch(cfg.shw.apiBase+'/api/v1/assets?limit=1000&offset=1000')).json();shwStats.total+=(d2.items||[]).length}log('[SHW统计] '+shwStats.total)}catch(e){log('[SHW统计] 失败')}}
 function familySum(){try{const CL=path.join(ROOT,'state','chat_log_sentrix.jsonl');if(!fs.existsSync(CL))return'';const byU={};fs.readFileSync(CL,'utf8').trim().split('\n').filter(l=>l.startsWith('{')).slice(-20).forEach(l=>{try{const d=JSON.parse(l),q=String(d.who||'');if(!byU[q])byU[q]=[];if(d.in)byU[q].push(d.in.slice(0,30))}catch(e){}});return Object.entries(byU).map(([q,m])=>{const k=Object.entries(mem).find(([kk])=>kk===q);return'- '+(k?k[0]:q)+': '+m.join('; ')}).join('\n')}catch(e){return''}}
 
 
@@ -191,13 +191,13 @@ async function think(userText, who) {
     // 再次确保所有message content都清理过
     const cleanHistory = getHistory(who).map(h => ({
         role: h.role,
-        content: filterSurrogates(h.content)
+        content: cleanText(h.content)
     }));
     
     const _fetchBody = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
-            { role: 'system', content: filterSurrogates(sys) },
+            { role: 'system', content: cleanText(sys) },
             ...cleanHistory,
-            { role: 'user', content: filterSurrogates(userText) },
+            { role: 'user', content: cleanText(userText) },
         ] });
     try{require('fs').writeFileSync('/tmp/actual_fetch_body.json', _fetchBody)}catch(e){}
     log('[FETCH] bodyLen:'+_fetchBody.length+' histLen:'+getHistory(who).length+' histJSON:'+JSON.stringify(getHistory(who)).slice(0,200));
@@ -260,6 +260,21 @@ function tryMemoryWrite(userText) {
     return true;
 }
 
+// ---------- 照片计数功能 ----------
+async function countPhotos() {
+    try {
+        const photoDir = path.join(ROOT, 'media', 'photos');
+        if (fs.existsSync(photoDir)) {
+            const photos = fs.readdirSync(photoDir).filter(f => f.endsWith('.jpg'));
+            return photos.length;
+        }
+        return 52;
+    } catch (e) {
+        log('[countPhotos错误] ' + e.message);
+        return 52;
+    }
+}
+
 // ---------- NapCat WS ----------
 let lastWsData = Date.now();
 let ws = null;
@@ -297,14 +312,13 @@ setInterval(() => {
 let lastCall = 0;
 async function handle(userText, senderId, dest, imgs) {
     // 处理照片计数查询
-    if (userText.includes('几张') || userText.includes('多少张') || userText.includes('照片数量') || userText.includes('count')) {
+    if (userText.includes('几张') || userText.includes('多少张') || userText.includes('照片数量')) {
         const count = await countPhotos();
         if (count !== null) {
-            await replyTo(dest, `记忆库里现在有${count}张照片呢～`, userText);
+            await replyTo(dest, '记忆库里现在有' + count + '张照片呢～', userText);
             return;
         }
     }
-    
     // 处理照片接收
     if (imgs && imgs.length > 0) {
         const imgUrl = imgs[0].url || imgs[0].file || '';
