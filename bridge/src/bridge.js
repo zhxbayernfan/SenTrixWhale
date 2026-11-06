@@ -7,6 +7,14 @@ const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
 // 四层: NapCat(QQ) -> bridge(本文件) -> DS API(对话骨架) + SHW检索API(记忆大坝, 阶段1)
 
 const fs = require('fs');
+
+// 全局异常处理，防止bridge崩溃退出
+process.on('uncaughtException', (e) => {
+    try { log('[uncaughtException] ' + (e.stack || e.message)); } catch {}
+});
+process.on('unhandledRejection', (e) => {
+    try { log('[unhandledRejection] ' + ((e && e.stack) || String(e))); } catch {}
+});
 const path = require('path');
 
 // ---------- 路径: 全部相对WHALE_HOME(跨平台口子) ----------
@@ -277,6 +285,9 @@ async function countPhotos() {
 
 // ---------- NapCat WS ----------
 let lastWsData = Date.now();
+// 消息去重
+const processedMessages = new Set();
+const MAX_PROCESSED = 100;
 let ws = null;
 function connect() {
     try {
@@ -291,11 +302,24 @@ function connect() {
             log('[WS] 解析后: post_type=' + m.post_type + ' user_id=' + m.user_id);
             if (m.post_type !== 'message') return;
             const text = (m.message || []).filter(p => p.type === 'text').map(p => p.data.text).join('');
-            if ((!text.trim()) || !isKnown(m.user_id)) return;
+            const imgs = (m.message || []).filter(p => p.type === 'image').map(p => p.data).slice(0, 3);
+            // 允许纯图片消息通过
+            if ((!text.trim() && imgs.length === 0) || !isKnown(m.user_id)) return;
             const dest = m.message_type === 'group' ? { kind: 'group', id: String(m.group_id), atQQ: m.user_id } : { kind: 'private', id: m.user_id };
             const atMe = (m.message || []).some(p => p.type === 'at' && String(p.data.qq) === String(m.self_id));
             if (m.message_type === 'group' && !atMe) return;
-            const imgs = (m.message || []).filter(p => p.type === 'image').map(p => p.data).slice(0, 3);
+            // 消息去重
+            const msgKey = m.message_id || m.time;
+            if (processedMessages.has(msgKey)) {
+                log('[WS] 跳过重复消息: ' + msgKey);
+                return;
+            }
+            processedMessages.add(msgKey);
+            if (processedMessages.size > MAX_PROCESSED) {
+                const firstKey = processedMessages.values().next().value;
+                processedMessages.delete(firstKey);
+            }
+            
             log('[WS] 准备调用handle: text=' + text.trim().slice(0,30) + ' user=' + m.user_id + ' imgs=' + imgs.length);
             handle(text.trim(), m.user_id, dest, imgs).catch(e => log('[handle错误] ' + e.message));
         } catch (e) { log('[WS解析] ' + e.message); }
@@ -305,7 +329,7 @@ function connect() {
 }
 // 看门狗: 90s无脉强连
 setInterval(() => {
-    if (ws && Date.now() - lastWsData > 90000) { try { ws.terminate(); } catch {} }
+    if (ws && Date.now() - lastWsData > 90000) { try { ws.close(); } catch {} }
 }, 30000);
 
 // ---------- 主处理 ----------
@@ -315,7 +339,10 @@ async function handle(userText, senderId, dest, imgs) {
     if (userText.includes('几张') || userText.includes('多少张') || userText.includes('照片数量')) {
         const count = await countPhotos();
         if (count !== null) {
-            await replyTo(dest, '记忆库里现在有' + count + '张照片呢～', userText);
+            const reply = '记忆库里现在有' + count + '张照片呢～';
+            // 记录chatLog
+            chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: reply });
+            await replyTo(dest, reply, userText);
             return;
         }
     }
@@ -333,13 +360,13 @@ async function handle(userText, senderId, dest, imgs) {
     // 检查是否在等待照片地点
     if (pendingPhoto && pendingPhoto.senderId === senderId) {
         pendingPhoto.round++;
-        const locationMatch = userText.match(/在(.{1,10}?)(市|省|区|县|家里|学校|公司)?/);
+        const locationMatch = userText.match(/(在)?([一-龥]{1,10}?)(市|省|区|县|家里|学校|公司|地方)?/);
         
         if (locationMatch || pendingPhoto.round > pendingPhoto.maxRounds) {
             if (locationMatch) {
                 try {
                     const result = await savePhoto(pendingPhoto.url, {
-                        city: locationMatch[1],
+                        city: locationMatch[2] || locationMatch[1],
                         description: userText
                     }, userText);
                     if (result.success) {
