@@ -22,8 +22,17 @@ state/qa_log.jsonl
 
 # 临时文件
 /tmp/*.json
+*.tmp
 
+# 备份文件
+*.backup_*
+*.bak
+*.backup
 
 # 表情包
 bridge/stickers/
 *.webp
+
+# 系统文件
+.DS_Store
+Thumbs.db
