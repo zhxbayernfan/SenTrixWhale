@@ -228,7 +228,7 @@ async function think(userText, who) {
     let sys = roleText() + identityNote + chatNote + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
     sys = filterSurrogates(sys);
 
-    const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
+    const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, reasoning: false, messages: [
             { role: 'user', content: sys + '\n\n---\n\n' + userText },
         ] });
     log('[DBG] bodyLen:'+_bodyStr.length+' sysLen:'+sys.length);
@@ -239,11 +239,17 @@ async function think(userText, who) {
         content: filterSurrogates(h.content)
     }));
     
-    const _fetchBody = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, messages: [
+    const _fetchBody = JSON.stringify({ 
+        model: cfg.ds.model, 
+        max_tokens: 2048, 
+        thinking: { type: 'disabled' },
+        reasoning: false,
+        messages: [
             { role: 'system', content: filterSurrogates(sys) },
             ...cleanHistory,
             { role: 'user', content: filterSurrogates(userText) },
-        ] });
+        ] 
+    });
     try{require('fs').writeFileSync('/tmp/actual_fetch_body.json', _fetchBody)}catch(e){}
     log('[FETCH] bodyLen:'+_fetchBody.length+' histLen:'+getHistory(who).length+' histJSON:'+JSON.stringify(getHistory(who)).slice(0,200));
     log('[think] 准备调用llama: ' + cfg.ds.baseUrl + '/chat/completions');
