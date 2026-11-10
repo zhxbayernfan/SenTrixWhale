@@ -1,5 +1,6 @@
 // photo_manager.js - 照片存储管理
 const fs = require('fs');
+const { parseExif, parseRelativeTime, mergeExifAndUserInput } = require('./exif_parser');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -238,3 +239,30 @@ async function deletePhoto(photoId) {
 // 更新module.exports
 const originalExports = module.exports;
 module.exports = { ...originalExports, deletePhoto };
+
+// ---------- 实时照片计数 ----------
+async function countPhotos() {
+    try {
+        const photoDir = path.join(ROOT, 'media', 'photos');
+        if (!fs.existsSync(photoDir)) {
+            return { total: 0, new: 0, frames: 0 };
+        }
+        
+        const allFiles = fs.readdirSync(photoDir);
+        const newPhotos = allFiles.filter(f => f.startsWith('photo_') && f.endsWith('.jpg'));
+        const framePhotos = allFiles.filter(f => f.startsWith('frame') && f.endsWith('.jpg'));
+        
+        return {
+            total: newPhotos.length + framePhotos.length,
+            new: newPhotos.length,
+            frames: framePhotos.length
+        };
+    } catch (e) {
+        console.error('[Photo Count] 错误:', e.message);
+        return { total: 0, new: 0, frames: 0 };
+    }
+}
+
+// 更新module.exports
+const originalExports = module.exports;
+module.exports = { ...originalExports, countPhotos };

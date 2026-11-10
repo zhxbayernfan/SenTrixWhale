@@ -8,6 +8,16 @@ const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
 
 const fs = require('fs');
 
+// 身份识别字典（借鉴家人鲸WHO_NOTE思路）
+const WHO_NOTE = {
+    '1303425363': { name: 'zhx1', role: '哥哥' },
+    '1309459509': { name: 'zhx2', role: '弟弟' }
+};
+
+function getWhoNote(qq) {
+    return WHO_NOTE[qq] || { name: '新朋友', role: '朋友' };
+}
+
 // 全局异常处理，防止bridge崩溃退出
 process.on('uncaughtException', (e) => {
     try { log('[uncaughtException] ' + (e.stack || e.message)); } catch {}
@@ -341,12 +351,11 @@ setInterval(() => {
 // ---------- 主处理 ----------
 let lastCall = 0;
 async function handle(userText, senderId, dest, imgs) {
-    // 明确身份识别：从config.json的owners获取
+    // 身份识别：使用WHO_NOTE字典
     const currentUserQQ = String(senderId);
-    const owners = cfg.owners || [];
-    const ownerIndex = owners.indexOf(Number(currentUserQQ));
-    const currentUserName = ownerIndex === 0 ? 'zhx1' : (ownerIndex === 1 ? 'zhx2' : '新朋友');
-    const userRole = ownerIndex === 0 ? '哥哥' : (ownerIndex === 1 ? '弟弟' : '朋友');
+    const whoInfo = getWhoNote(currentUserQQ);
+    const currentUserName = whoInfo.name;
+    const userRole = whoInfo.role;
     // 处理照片计数查询
     if (userText.includes('几张') || userText.includes('多少张') || userText.includes('照片数量')) {
         const count = await countPhotos();
@@ -372,15 +381,27 @@ async function handle(userText, senderId, dest, imgs) {
     // 检查是否在等待照片地点
     if (pendingPhoto && pendingPhoto.senderId === senderId) {
         pendingPhoto.round++;
-        // 分离地点和时间信息
-        const locationMatch = userText.match(/(在)?([一-龥]{2,10}?(?:市|省|区|县)?|家里|学校|公司)/);
-        const timeMatch = userText.match(/(\d{4}年\d{1,2}月\d{1,2}号?|\d{4}年\d{1,2}月|\d{1,2}月\d{1,2}号?|昨天|前天|上周|上个月|去年|今年|\d{4}年)/);
-        
+        // 精确地点匹配（已知城市列表）
+        const knownCities = ['杭州', '深圳', '西安', '济南', '广州', '北京', '上海', '南京', '成都', '武汉', '重庆', '天津', '苏州', '长沙', '郑州', '沈阳', '大连', '青岛', '宁波', '厦门'];
         let location = '';
         let timeInfo = '';
-        if (locationMatch) {
-            location = locationMatch[2] || locationMatch[1];
+        
+        // 先匹配固定地点
+        const fixedMatch = userText.match(/(杭州家|深圳学校)/);
+        if (fixedMatch) {
+            location = fixedMatch[1];
+        } else {
+            // 匹配已知城市
+            for (const city of knownCities) {
+                if (userText.includes(city)) {
+                    location = city;
+                    break;
+                }
+            }
         }
+        
+        // 时间匹配
+        const timeMatch = userText.match(/(\d{4}年\d{1,2}月\d{1,2}[日号]?|\d{4}年\d{1,2}月|\d{1,2}月\d{1,2}[日号]?|昨天|前天|上周|上个月|去年|今年|\d{4}年)/);
         if (timeMatch) {
             timeInfo = timeMatch[1];
         }
