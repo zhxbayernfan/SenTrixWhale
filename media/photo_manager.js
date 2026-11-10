@@ -237,8 +237,6 @@ async function deletePhoto(photoId) {
 }
 
 // 更新module.exports
-const originalExports = module.exports;
-module.exports = { ...originalExports, deletePhoto };
 
 // ---------- 实时照片计数 ----------
 async function countPhotos() {
@@ -264,5 +262,3 @@ async function countPhotos() {
 }
 
 // 更新module.exports
-const originalExports = module.exports;
-module.exports = { ...originalExports, countPhotos };

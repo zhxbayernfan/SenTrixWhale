@@ -8,6 +8,29 @@ const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
 
 const fs = require('fs');
 
+// 日志记录函数
+function logChat(who, userText, reply, usage) {
+    try {
+        const CL = path.join(ROOT, 'state', 'chat_log_sentrix.jsonl');
+        const d = new Date();
+        const p2t = (x) => String(x).padStart(2, '0');
+        const ts = d.getFullYear() + '-' + p2t(d.getMonth() + 1) + '-' + p2t(d.getDate()) + ' ' + p2t(d.getHours()) + ':' + p2t(d.getMinutes()) + ':' + p2t(d.getSeconds());
+        const record = {
+            event: 'chat',
+            who: who,
+            dest: 'private',
+            ts: ts,
+            in: userText,
+            out: reply,
+            usage: usage || {},
+            cost: 0
+        };
+        fs.appendFileSync(CL, JSON.stringify(record) + '\n');
+    } catch (e) {
+        log('[logChat错误] ' + e.message);
+    }
+}
+
 // 身份识别字典（借鉴家人鲸WHO_NOTE思路）
 const WHO_NOTE = {
     '1303425363': { name: 'zhx1', role: '哥哥' },
@@ -184,7 +207,7 @@ async function think(userText, who) {
     log('[think] 护栏检查: calls=' + daily.calls + ' cost=' + daily.costYuan);
     if (overLimit()) {
         log(`[下沉] 调用${daily.calls}次 花费${daily.costYuan.toFixed(4)}元, 超线拒答`);
-        return '今天电量不足, 明天再见 [whale]';
+        return '今天电量不足, 明天再见 ';
     }
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
     const hits = await shwSearch(userText);
@@ -363,7 +386,8 @@ async function handle(userText, senderId, dest, imgs) {
             const reply = '记忆库里现在有' + count + '张照片呢～';
             // 记录chatLog
             chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: reply });
-            await replyTo(dest, reply, userText);
+            logChat(senderId, userText, reply, u);
+        await replyTo(dest, reply, userText);
             return;
         }
     }
@@ -435,7 +459,7 @@ async function handle(userText, senderId, dest, imgs) {
     }
     
     if (tryMemoryWrite(userText)) {
-        await replyTo(dest, '记住了 [whale] 已入库并生成抽查问答。');
+        await replyTo(dest, '记住了  已入库并生成抽查问答。');
         return;
     }
     const gap = (Date.now() - lastCall) / 1000;
@@ -444,11 +468,13 @@ async function handle(userText, senderId, dest, imgs) {
     try {
         const reply = await think(userText, senderId);
         addHistory(senderId, userText, reply);
+        logChat(senderId, userText, reply, u);
         await replyTo(dest, reply, userText);
     } catch (e) {
         log('[错误] ' + e.message);
         // 错误回复也记录chatLog
         chatLog({ event: 'chat', who: senderId, dest: 'private', in: userText, out: '处理出错了, 请稍后再试。', error: e.message });
+        logChat(senderId, userText, '处理出错了, 请稍后再试。', null);
         await replyTo(dest, '处理出错了, 请稍后再试。');
     }
 }
