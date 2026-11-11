@@ -7,6 +7,8 @@ const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
 // 四层: NapCat(QQ) -> bridge(本文件) -> DS API(对话骨架) + SHW检索API(记忆大坝, 阶段1)
 
 const fs = require('fs');
+// [FIX-1] think() 的 usage 原来是局部变量, handle() 里 logChat(..., u) 会 ReferenceError
+let lastUsage = null;
 
 // 日志记录函数
 function logChat(who, userText, reply, usage) {
@@ -149,18 +151,89 @@ function genCheckQA(key, value) {
 }
 
 // ---------- SHW检索桩(阶段1主功能): 对接SHW检索API, 拿回记忆证据 ----------
+function timeRangeOf(q) {  // [FIX-7] 时间词 -> SHW 的 time_range + 本地校验区间
+    const d = new Date();
+    const y = d.getFullYear(), m = d.getMonth() + 1;
+    const iso = (a) => a.toISOString().slice(0, 10);
+    const mk = (yy, mm) => {
+        const a = new Date(Date.UTC(yy, mm - 1, 1));
+        const b = new Date(Date.UTC(yy, mm, 1));
+        return { label: `${yy}年${mm}月`, from: iso(a), to: iso(new Date(b - 864e5)) };
+    };
+    if (/去年/.test(q)) return { label: `${y - 1}年`, from: `${y - 1}-01-01`, to: `${y - 1}-12-31` };
+    if (/今年/.test(q)) return { label: `${y}年`, from: `${y}-01-01`, to: `${y}-12-31` };
+    if (/上个月/.test(q)) return mk(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1);
+    if (/上周|上星期|这几天|最近/.test(q)) { const t = new Date(Date.now() - 7 * 864e5); return mk(t.getFullYear(), t.getMonth() + 1); }
+    const ym = q.match(/(\d{4})年(\d{1,2})?月?/);
+    if (ym) return ym[2] ? mk(Number(ym[1]), Number(ym[2])) : { label: `${ym[1]}年`, from: `${ym[1]}-01-01`, to: `${ym[1]}-12-31` };
+    return null;
+}
+
+// [FIX-10] 事件/摘要才是能开口说话的"记忆"; 向量检索只给文件名, 说不了事
+let tlCache = { at: 0, days: [] };
+async function timelineDays() {
+    if (tlCache.days.length && Date.now() - tlCache.at < 10 * 60 * 1000) return tlCache.days;
+    try {
+        const byDate = {};
+        let total = Infinity;
+        for (let off = 0; off < 600 && Object.keys(byDate).length < total; off += 200) {
+            const r = await fetch(cfg.shw.apiBase + '/api/v1/timeline?limit=200&offset=' + off);
+            if (!r.ok) break;
+            const j = await r.json();
+            total = j.total || 0;
+            const days = j.days || [];
+            if (!days.length) break;
+            for (const d of days) byDate[d.date] = d;
+        }
+        const days = Object.entries(byDate).map(([k, v]) => v).sort((a, b) => (a.date < b.date ? 1 : -1));
+        tlCache = { at: Date.now(), days };
+        log('[SHW] 时间线缓存 ' + days.length + ' 天 / total ' + total);
+    } catch (e) { log('[SHW] 时间线失败: ' + e.message); }
+    return tlCache.days;
+}
+
+async function eventsInRange(from, to) {
+    const days = await timelineDays();
+    const out = [];
+    for (const d of days) {
+        if (d.date < from || d.date > to) continue;
+        for (const e of (d.events || [])) {
+            const sum = String(e.summary || '').replace(/\s+/g, ' ').trim();
+            if (!sum) continue;
+            out.push({ date: d.date, place: String(e.place || '').slice(-12), summary: sum.slice(0, 90) });
+        }
+    }
+    return out.slice(0, 3);
+}
+
 async function shwSearch(query) {
     if (!cfg.shw || !cfg.shw.enabled) return null;  // 未启用: 走本地记忆
     try {
-        const r = await fetch(cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(query) + '&top_k=5');
+        const tr = timeRangeOf(query);
+        // [FIX-9] SHW 的 time_range 过滤在本机会抛 "naive/aware datetime" 错, metadata 通道降级,
+        // 于是它仍会把 2023 年的照片当"上周"返回. 这里不信任服务端过滤, 取回后本地按日期硬筛.
+        const _u = cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(query) + '&top_k=10'
+            + (tr ? '&time_range=' + encodeURIComponent(tr.label) : '');
+        const r = await fetch(_u);
         if (!r.ok) { log('[SHW] HTTP ' + r.status); return null; }
         const j = await r.json();
-        const items = (j.items || []).slice(0, 5).map(it => ({
-            file: it.asset && it.asset.file_name,
-            time: it.asset && it.asset.captured_at,
-            type: it.asset && it.asset.media_type,
-        })).filter(x => x.file);
-        return { count: (j.items || []).length, items };  // 精简素材给DS
+        const seen = new Set();
+        const items = (j.items || []).filter(it => {   // [FIX-6] 同一张图会返回多条, 按文件名去重
+            const a = it.asset || {};
+            if (!a.file_name || seen.has(a.file_name)) return false;
+            if (tr) {                                  // [FIX-9] 只留落在时间区间内的
+                const day = String(a.captured_at || '').slice(0, 10);
+                if (!day || day < tr.from || day > tr.to) return false;
+            }
+            seen.add(a.file_name); return true;
+        }).slice(0, 5).map(it => ({
+            file: it.asset.file_name,
+            time: it.asset.captured_at,
+            type: it.asset.media_type,
+        }));
+        log(`[SHW] q="${query}"${tr ? ' 区间=' + tr.from + '~' + tr.to : ''} 原始${(j.items || []).length}条 去重/筛选后${items.length}条`);
+        const events = tr ? await eventsInRange(tr.from, tr.to) : [];
+        return { count: items.length, items, events };
     } catch (e) { log('[SHW] 检索失败: ' + e.message); return null; }
 }
 
@@ -218,14 +291,18 @@ async function think(userText, who) {
     const chatNote = famSum ? `\n最近大家聊过：\n${famSum}` : '';
     let memBlock;
     if (hits && hits.count > 0) {
-        const firstItem = hits.items[0];
-        const timeHint = firstItem?.time ? `${firstItem.time.split(' ')[0]}那天` : '之前';
-        memBlock = `我好像记得一些相关的事情... (${timeHint}的记录)`;
+        // [FIX-4] 原来 memBlock 算完就扔了, 模型根本看不到检索结果
+        const times = hits.items.map(x => x && x.time).filter(Boolean).sort();
+        const span = times.length ? `，照片时间 ${times[0]} 到 ${times[times.length - 1]}` : '';
+        const lines = (hits.events || []).map(e => `- ${e.date} ${e.place}：${e.summary}`).join('\n');
+        memBlock = `【记忆证据】${lines ? '这几天你自己记下的事：\n' + lines + '\n' : ''}命中 ${hits.count} 条照片${span}。只用上面这些事实回答，可以说"我记得"，不许补充证据之外的人名、地点、情节。`;
     } else {
-        memBlock = memText() ? `我认识家里这些人：\n${memText()}\n\n最近大家聊的：\n${famSum || '还没什么人聊过天呢'}` : '我的记忆还空着呢';
+        // [FIX-8] 检索为空时必须直说没存到, 不许拿"温馨瞬间"之类的空话糊弄
+        memBlock = '【记忆证据】这一问检索到 0 条记录。你必须如实说"这个我没存到/没找到"，绝对不要编造照片内容、地点或时间。'
+            + (memText() ? `\n你确实认识的家里人：\n${memText()}` : '');
     }
 
-    let sys = roleText() + identityNote + chatNote + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
+    let sys = roleText() + identityNote + chatNote + '\n\n' + memBlock + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
     sys = filterSurrogates(sys);
 
     const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, reasoning: false, messages: [
@@ -256,7 +333,7 @@ async function think(userText, who) {
     const r = await fetch(cfg.ds.baseUrl + '/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.ds.apiKey },
-        body: _fetchBody,
+        body: _fetchBody.replace('"messages"', '"chat_template_kwargs":{"enable_thinking":false},"messages"'), // [FIX-5]
     });
     log('[think] llama响应状态: ' + r.status);
     if (!r.ok) {
@@ -272,6 +349,7 @@ async function think(userText, who) {
     // 过滤输入中的surrogate字符
     userText = filterSurrogates(userText);
     const u = j.usage || {};
+    lastUsage = u; // [FIX-1]
     daily.calls += 1;
     daily.cachedIn += u.prompt_cache_hit_tokens || 0;
     daily.plainIn += u.prompt_cache_miss_tokens || u.prompt_tokens || 0;
@@ -389,10 +467,10 @@ async function handle(userText, senderId, dest, imgs) {
     if (userText.includes('几张') || userText.includes('多少张') || userText.includes('照片数量')) {
         const count = await countPhotos();
         if (count !== null) {
-            const reply = '记忆库里现在有' + count + '张照片呢～';
+            const reply = '记忆库里现在有' + count.total + '张照片呢～'; // [FIX-2]
             // 记录chatLog
             chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: reply });
-            logChat(senderId, userText, reply, u);
+            logChat(senderId, userText, reply, lastUsage);
         await replyTo(dest, reply, userText);
             return;
         }
@@ -436,8 +514,8 @@ async function handle(userText, senderId, dest, imgs) {
             timeInfo = timeMatch[1];
         }
         
-        if ((locationMatch || timeMatch) || pendingPhoto.round > pendingPhoto.maxRounds) {
-            if (locationMatch || timeMatch) {
+        if ((location || timeInfo) || pendingPhoto.round > pendingPhoto.maxRounds) { // [FIX-3]
+            if (location || timeInfo) {
                 try {
                     const result = await savePhoto(pendingPhoto.url, {
                         city: location || '未知地点',
@@ -474,7 +552,7 @@ async function handle(userText, senderId, dest, imgs) {
     try {
         const reply = await think(userText, senderId);
         addHistory(senderId, userText, reply);
-        logChat(senderId, userText, reply, u);
+        logChat(senderId, userText, reply, lastUsage);
         await replyTo(dest, reply, userText);
     } catch (e) {
         log('[错误] ' + e.message);
@@ -533,7 +611,13 @@ async function replyTo(dest, text, userInput) {
 }
 
 // ---------- 启动 ----------
-log("[启动] SenTrixWhale bridge | 护栏=10元/500次 | SHW检索=启用 | 模型=本地");
-fetchSHWStats();
-connect();
+if (!process.env.STW_NO_CONNECT) {
+    log("[启动] SenTrixWhale bridge | 护栏=10元/500次 | SHW检索=启用 | 模型=本地");
+    fetchSHWStats();
+    connect();
+} else {
+    log("[测试] STW_NO_CONNECT=1, 跳过 WS 连接");
+}
+// [测试用] 导出以便无 QQ 环境跑通链路
+module.exports = { handle, connect };
 
