@@ -1,5 +1,5 @@
-// bridge/stickers/sticker_map.js — 表情包配字↔语义名↔文件 双映射表(261106)
-// 数据源: 000Notes/鲸鱼娘表情包/(80张webp) + 000Notes/考卷/024/025(zhx专属png) = 82张
+// bridge/stickers/sticker_map.js — 表情包配字↔语义名↔文件 双映射表(261111)
+// 数据源: 000Notes/鲸鱼娘表情包/(149张webp) + 000Notes/考卷/024/025(zhx专属png) = 151张
 // 用法: QQ收到表情图 → llama视觉读配字 → matchSticker()查语义名 → 文件名回发
 // 匹配原则: 配字识别可靠(考卷实测qwen3.5读配字准), 键名匹配不可靠(2%-5%), 故以配字为锚
 
@@ -84,6 +84,41 @@ const STICKER_BY_TEXT = {
   'ISFP 调色板小画家': { name: 'ISFP_Painter', file: '76_ISFP 调色板小画家.webp' },
   'ISTJ 日更打卡员': { name: 'ISTJ_Logger', file: '77_ISTJ 日更打卡员.webp' },
   'ISTP 修理工鲸': { name: 'ISTP_Mechanic', file: '78_ISTP 修理工鲸.webp' },
+  // 冬装系列(79-117)
+  '冬装 · 打哈欠 困哭': { name: 'WinterSleepy', file: '100_冬装 · 打哈欠 困哭.webp' },
+  '冬装 · 捂脸 躲起来': { name: 'WinterShy', file: '101_冬装 · 捂脸 躲起来.webp' },
+  '冬装 · 晚安 困': { name: 'WinterGoodNight', file: '102_冬装 · 晚安 困.webp' },
+  '冬装 · 谢谢 合十': { name: 'WinterThanks', file: '103_冬装 · 谢谢 合十.webp' },
+  '冬装 · OK 眨眼': { name: 'WinterOK', file: '104_冬装 · OK 眨眼.webp' },
+  '冬装 · 加油 握拳': { name: 'WinterGo', file: '105_冬装 · 加油 握拳.webp' },
+  '冬装 · 对不起 缩成团': { name: 'WinterSorry', file: '106_冬装 · 对不起 缩成团.webp' },
+  '冬装 · 收到 敬礼': { name: 'WinterSalute', file: '107_冬装 · 收到 敬礼.webp' },
+  '冬装 · 挥手 hello': { name: 'WinterHello', file: '108_冬装 · 挥手 hello.webp' },
+  '冬装 · 哭哭 抹泪': { name: 'WinterCry', file: '109_冬装 · 哭哭 抹泪.webp' },
+  '冬装 · 大笑 笑出泪': { name: 'WinterLaugh', file: '110_冬装 · 大笑 笑出泪.webp' },
+  '冬装 · 摸鱼 趴着刷平板': { name: 'WinterSlacking', file: '111_冬装 · 摸鱼 趴着刷平板.webp' },
+  '冬装 · 吃瓜 西瓜': { name: 'WinterMelon', file: '112_冬装 · 吃瓜 西瓜.webp' },
+  '冬装 · 雪人 抱雪人': { name: 'WinterSnowman', file: '113_冬装 · 雪人 抱雪人.webp' },
+  '冬装 · 比心': { name: 'WinterHeart', file: '114_冬装 · 比心.webp' },
+  '冬装 · 星星眼 合十': { name: 'WinterStarEyes', file: '115_冬装 · 星星眼 合十.webp' },
+  '冬装 · 坐着 幽灵': { name: 'WinterGhost', file: '117_冬装 · 坐着 幽灵.webp' },
+  // MBTI 新版(118-133, 与 63-78 重复但文件名不同)
+  'ENFJ 守护骑士 v2': { name: 'ENFJ_GuardianKnight_v2', file: '118_ENFJ 守护骑士.webp' },
+  'ENFP 背包冒险家 v2': { name: 'ENFP_Backpacker_v2', file: '119_ENFP 背包冒险家.webp' },
+  'ENTJ 鲸群指挥官 v2': { name: 'ENTJ_Commander_v2', file: '120_ENTJ 鲸群指挥官.webp' },
+  'ENTP 讲台抬杠大师 v2': { name: 'ENTP_Debater_v2', file: '121_ENTP 讲台抬杠大师.webp' },
+  'ESFJ 送蛋糕的贴心鲸 v2': { name: 'ESFJ_CaringWhale_v2', file: '122_ESFJ 送蛋糕的贴心鲸.webp' },
+  'ESFP 深海气氛组 v2': { name: 'ESFP_Performer_v2', file: '123_ESFP 深海气氛组.webp' },
+  'ESTJ 审批局长 v2': { name: 'ESTJ_Inspector_v2', file: '124_ESTJ 审批局长.webp' },
+  'ESTP 冲浪运动员 v2': { name: 'ESTP_Surfer_v2', file: '125_ESTP 冲浪运动员.webp' },
+  'INFJ 绿袍贤者 v2': { name: 'INFJ_Sage_v2', file: '126_INFJ 绿袍贤者.webp' },
+  'INFP 发呆小鲸 v2': { name: 'INFP_Dreamer_v2', file: '127_INFP 发呆小鲸.webp' },
+  'INTJ 沙盘军师 v2': { name: 'INTJ_Strategist_v2', file: '128_INTJ 沙盘军师.webp' },
+  'INTP 实验室研究员 v2': { name: 'INTP_Researcher_v2', file: '129_INTP 实验室研究员.webp' },
+  'ISFJ 小护士鲸 v2': { name: 'ISFJ_Nurse_v2', file: '130_ISFJ 小护士鲸.webp' },
+  'ISFP 调色板小画家 v2': { name: 'ISFP_Painter_v2', file: '131_ISFP 调色板小画家.webp' },
+  'ISTJ 日更打卡员 v2': { name: 'ISTJ_Logger_v2', file: '132_ISTJ 日更打卡员.webp' },
+  'ISTP 修理工鲸 v2': { name: 'ISTP_Mechanic_v2', file: '133_ISTP 修理工鲸.webp' },
   // zhx专属(考卷新增, 配字见图内题字)
   '摸鱼': { name: 'RubTheWhale', file: '025RubTheWhale.png' },
   '钱塘江畔大肥鱼': { name: 'AWhaleInLandscapePainting', file: '024AWhaleInLandscapePainting.png' },
