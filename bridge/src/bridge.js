@@ -2,7 +2,8 @@
 const { matchSticker, resolveSticker, takeRoundTicket, resetStickerRound } = require('../stickers_bridge.js');
 const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
 const { ingestPhoto } = require('../../media/shw_ingest'); // [存图] 归档+补EXIF+入SHW
-const { resolve: resolveAlbum } = require('../../media/album_resolver'); // [存图] 一句话→相册路径+时间
+const { resolve: resolveAlbum, cityFromGps } = require('../../media/album_resolver');
+const { parseExif } = require('../../media/exif_parser'); // [存图] 一句话→相册路径+时间
 // SenTrixWhale bridge v0.1 — 工程鲸桥接(零依赖, Node>=22)
 // 定位: SHW记忆助手的QQ交互前端 — 对话即记忆输入, 检索即回答, 质检即信任.
 //
@@ -548,6 +549,35 @@ async function handle(userText, senderId, dest, imgs) {
                 const r = await fetch(imgUrl, { signal: AbortSignal.timeout(20000) });
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 const buf = Buffer.from(await r.arrayBuffer());
+
+                // [EXIF 自动] 如果这张图还带着 EXIF（QQ「原图」可能保留），就不用问用户：
+                // 时间来自 DateTimeOriginal，城市来自 GPS 反查。
+                let autoParsed = null;
+                try {
+                    const tmp = require('path').join(require('os').tmpdir(), `stw_${Date.now()}.jpg`);
+                    require('fs').writeFileSync(tmp, buf);
+                    const ex = parseExif(tmp);
+                    require('fs').unlinkSync(tmp);
+                    if (ex && ex.dateTime) {
+                        const m = String(ex.dateTime).match(/(\d{4})[:\-](\d{2})[:\-](\d{2})[ T](\d{2}):(\d{2})/);
+                        const when = m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) : null;
+                        const city = ex.gps ? cityFromGps(ex.gps.latitude, ex.gps.longitude) : null;
+                        if (when && city) {
+                            const cr = resolveAlbum(city, { homeProvince: (cfg.album && cfg.album.homeProvince) || '广东' });
+                            if (cr.ok) {
+                                autoParsed = { ...cr, when, precision: 'day', fromExif: true, gps: ex.gps };
+                                log(`[EXIF] 自动识别 ${cr.path} ${when.toISOString().slice(0, 10)} (${ex.gps.latitude},${ex.gps.longitude})`);
+                            }
+                        } else {
+                            log(`[EXIF] 有数据但不够：time=${!!when} gps=${!!ex.gps}`);
+                        }
+                    }
+                } catch (e) { log('[EXIF] 解析失败: ' + e.message); }
+
+                if (autoParsed) {
+                    await doIngest(buf, autoParsed, dest, '来自照片自带的信息');
+                    return;
+                }
 
                 // [带字直存] 图和话在同一条消息里，能解析就直接收，不追问
                 const parsedNow = resolveAlbum(userText || '', {
