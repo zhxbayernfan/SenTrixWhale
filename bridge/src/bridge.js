@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 const { matchSticker, resolveSticker, takeRoundTicket, resetStickerRound } = require('../stickers_bridge.js');
 const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
+const { ingestPhoto } = require('../../media/shw_ingest'); // [存图] 归档+补EXIF+入SHW
+const { resolve: resolveAlbum } = require('../../media/album_resolver'); // [存图] 一句话→相册路径+时间
 // SenTrixWhale bridge v0.1 — 工程鲸桥接(零依赖, Node>=22)
 // 定位: SHW记忆助手的QQ交互前端 — 对话即记忆输入, 检索即回答, 质检即信任.
 //
@@ -298,11 +300,17 @@ async function think(userText, who) {
         memBlock = `【记忆证据】${lines ? '这几天你自己记下的事：\n' + lines + '\n' : ''}命中 ${hits.count} 条照片${span}。只用上面这些事实回答，可以说"我记得"，不许补充证据之外的人名、地点、情节。`;
     } else {
         // [FIX-8] 检索为空时必须直说没存到, 不许拿"温馨瞬间"之类的空话糊弄
-        memBlock = '【记忆证据】这一问检索到 0 条记录。你必须如实说"这个我没存到/没找到"，绝对不要编造照片内容、地点或时间。'
+        // [FIX-11] 模型不知道今天几号, 会把"没检索到"解释成"还没到", 必须把日期和话术都钉死
+        const _now = new Date();
+        const _today = `${_now.getFullYear()}年${_now.getMonth() + 1}月${_now.getDate()}日`;
+        memBlock = `【今天是 ${_today}】这一问检索到 0 条记录。你必须如实说"这个我没存到/没找到"，`
+            + '绝对不要编造照片内容、地点或时间，也不要猜"还没到""还没拍""以后再说"这类理由——'
+            + '库里有就是有，没有就是没存到。'
             + (memText() ? `\n你确实认识的家里人：\n${memText()}` : '');
     }
 
-    let sys = roleText() + identityNote + chatNote + '\n\n' + memBlock + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
+    const _d = new Date();
+    let sys = `今天是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日。\n` + roleText() + identityNote + chatNote + '\n\n' + memBlock + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
     sys = filterSurrogates(sys);
 
     const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, reasoning: false, messages: [
@@ -455,6 +463,19 @@ setInterval(() => {
     if (ws && Date.now() - lastWsData > 90000) { try { ws.close(); } catch {} }
 }, 30000);
 
+// [存图] 从一句话里认相册名：广东 / 广东相册 / 收进浙江
+const ALBUM_WORDS = ['广东','浙江','江苏','福建','山东','河南','河北','湖南','湖北','四川','云南',
+    '广西','陕西','山西','江西','安徽','辽宁','吉林','黑龙江','内蒙古','甘肃','青海','宁夏',
+    '新疆','西藏','海南','贵州','北京','上海','天津','重庆','香港','澳门','台湾',
+    '杭州','深圳','广州','西安','济南','南京','成都','武汉','苏州','长沙','郑州','沈阳',
+    '大连','青岛','宁波','厦门','石家庄','邯郸','宿州','惠州'];
+function parseAlbum(text) {
+    const m = String(text).match(/([\u4e00-\u9fa5]{1,6})相册/);
+    if (m) return m[1];
+    for (const w of ALBUM_WORDS) if (String(text).includes(w)) return w;
+    return '';
+}
+
 // ---------- 主处理 ----------
 let lastCall = 0;
 async function handle(userText, senderId, dest, imgs) {
@@ -475,73 +496,78 @@ async function handle(userText, senderId, dest, imgs) {
             return;
         }
     }
-    // 处理照片接收
+    // ── 存图：发图 → 说相册+日期 → 归档并入库 SHW ──────────────────
     if (imgs && imgs.length > 0) {
         const imgUrl = imgs[0].url || imgs[0].file || '';
         if (imgUrl && !imgUrl.includes('sticker')) {
-            log('[handle] 收到照片');
-            pendingPhoto = { url: imgUrl, senderId, dest, round: 0, maxRounds: 3 };
-            await replyTo(dest, '收到照片啦 这是在哪里拍的呢？告诉我城市就好～', userText);
+            log('[存图] 收到照片');
+            try {
+                const r = await fetch(imgUrl, { signal: AbortSignal.timeout(20000) });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const buf = Buffer.from(await r.arrayBuffer());
+                pendingPhoto = { buf, senderId, dest, round: 0, maxRounds: 3 };
+                await replyTo(dest, '收到图了～ 想收进哪本相册、记成哪天？说「广东 2023年4月29日」这样就行。', userText);
+            } catch (e) {
+                log('[存图] 下载失败: ' + e.message);
+                await replyTo(dest, '这张图没下下来，麻烦再发一次～', userText);
+            }
             return;
         }
     }
-    
-    // 检查是否在等待照片地点
+
     if (pendingPhoto && pendingPhoto.senderId === senderId) {
-        pendingPhoto.round++;
-        // 精确地点匹配（已知城市列表）
-        const knownCities = ['杭州', '深圳', '西安', '济南', '广州', '北京', '上海', '南京', '成都', '武汉', '重庆', '天津', '苏州', '长沙', '郑州', '沈阳', '大连', '青岛', '宁波', '厦门'];
-        let location = '';
-        let timeInfo = '';
-        
-        // 先匹配固定地点
-        const fixedMatch = userText.match(/(杭州家|深圳学校)/);
-        if (fixedMatch) {
-            location = fixedMatch[1];
-        } else {
-            // 匹配已知城市
-            for (const city of knownCities) {
-                if (userText.includes(city)) {
-                    location = city;
-                    break;
+        pendingPhoto.round = (pendingPhoto.round || 0) + 1;
+        const parsed = resolveAlbum(userText, {
+            homeProvince: (cfg.album && cfg.album.homeProvince) || '广东',
+        });
+
+        if (parsed.ok) {
+            try {
+                const r = await ingestPhoto(pendingPhoto.buf, {
+                    album: parsed.path,
+                    when: parsed.when,
+                    precision: parsed.precision,
+                    said: userText,
+                    place: parsed.place,
+                    scopeId: parsed.path,
+                    shwBase: (cfg.shw && cfg.shw.apiBase) || 'http://127.0.0.1:8191',
+                });
+                if (r.ok) {
+                    log('[存图] ' + r.relFile + ' -> ' + r.assetId + ' (' + parsed.precision + ')');
+                    const day = r.when.slice(0, 10).replace(/:/g, '-');
+                    const tail = parsed.precision === 'day' ? `${day}`
+                        : parsed.precision === 'month' ? `${day.slice(0, 7)}（只到月份）`
+                            : `${day.slice(0, 4)} 年（只到年份）`;
+                    await replyTo(dest,
+                        `收好了 🐳 收进《${parsed.path}》，记作 ${tail}。${r.dedup ? '（这张之前收过，没重复占地方）' : ''}`,
+                        userText);
+                } else {
+                    await replyTo(dest, '存的时候出了岔子：' + String(r.error).slice(0, 60), userText);
                 }
-            }
-        }
-        
-        // 时间匹配
-        const timeMatch = userText.match(/(\d{4}年\d{1,2}月\d{1,2}[日号]?|\d{4}年\d{1,2}月|\d{1,2}月\d{1,2}[日号]?|昨天|前天|上周|上个月|去年|今年|\d{4}年)/);
-        if (timeMatch) {
-            timeInfo = timeMatch[1];
-        }
-        
-        if ((location || timeInfo) || pendingPhoto.round > pendingPhoto.maxRounds) { // [FIX-3]
-            if (location || timeInfo) {
-                try {
-                    const result = await savePhoto(pendingPhoto.url, {
-                        city: location || '未知地点',
-                        time: timeInfo || '',
-                        description: userText
-                    }, userText);
-                    if (result.success) {
-                        await replyTo(dest, `照片存好啦 地点记作${result.coords.locationName}～`, userText);
-                    } else {
-                        await replyTo(dest, '照片保存失败了呢', userText);
-                    }
-                } catch(e) {
-                    await replyTo(dest, '照片处理出错了', userText);
-                }
-            } else {
-                await replyTo(dest, '这张图没能存入系统呢 下次记得告诉我地点哦～', userText);
+            } catch (e) {
+                log('[存图] 出错: ' + e.message);
+                await replyTo(dest, '存图出错了，再试一次？', userText);
             }
             pendingPhoto = null;
             return;
-        } else {
-            const remaining = pendingPhoto.maxRounds - pendingPhoto.round;
-            await replyTo(dest, `还没告诉我地点呢～再不说这张图就存不进去啦（还剩${remaining}次机会）`, userText);
+        }
+
+        // 三轮拒收：第 3 次还说不清就不收了，但留一句"能捡回来"
+        if (pendingPhoto.round >= pendingPhoto.maxRounds) {
+            pendingPhoto = null;
+            await replyTo(dest, '这张我先不收啦，想存的时候再发一次图，或者跟我说「收回刚才那张」🐳', userText);
             return;
         }
+        const miss = parsed.missing.includes('place') && parsed.missing.includes('date')
+            ? '相册名和日期'
+            : parsed.missing.includes('place') ? '相册名' : '日期';
+        const hint = parsed.missing.includes('place') && parsed.missing.includes('date')
+            ? '「深圳南山 2023年4月29日」'
+            : parsed.missing.includes('place') ? '「深圳南山」' : '「2023年4月29日」';
+        await replyTo(dest, `还差${miss}～ 比如 ${hint}`, userText);
+        return;
     }
-    
+
     if (tryMemoryWrite(userText)) {
         await replyTo(dest, '记住了  已入库并生成抽查问答。');
         return;
