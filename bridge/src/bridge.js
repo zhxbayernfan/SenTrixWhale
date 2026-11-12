@@ -112,8 +112,13 @@ function familySum(){try{const CL=path.join(ROOT,'state','chat_log_sentrix.jsonl
 const chatHistory = {};
 const MAX_HISTORY = 5;
 function getHistory(who) {
-    // 返回空数组，避免历史混淆
-    return [];
+    // [FIX-12] 原来直接返回空数组"避免混淆"，结果每轮都是失忆的：
+    // 多聊几句就接不上，两个号更是分不清。按 QQ 号隔离 + 截断，才是正确做法。
+    const h = chatHistory[who] || [];
+    return h.slice(-6).map((m) => ({
+        role: m.role,
+        content: String(m.content || '').slice(0, 150),
+    }));
 }
 function addHistory(who, userText, reply) {
     if (!chatHistory[who]) chatHistory[who] = [];
@@ -310,7 +315,12 @@ async function think(userText, who) {
     }
 
     const _d = new Date();
-    let sys = `今天是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日。\n` + roleText() + identityNote + chatNote + '\n\n' + memBlock + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
+    const _who = getWhoNote(who);
+    let sys = `今天是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日。\n` + roleText() + identityNote + chatNote + '\n\n' + memBlock
+        + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
+    // [FIX-13] 说话人挪到最末尾：4B 模型对开头注意力弱，放远会被角色卡冲掉；
+    // 并且明确写死"你不是他"，否则它会把对方的名字当自己的
+    sys += `\n\n【本轮】对话的是 ${_who.name}（${_who.role}，QQ ${who}）。你是工程鲸，不是 ${_who.name}，也不是任何一个人。叫对方时用"${_who.role}"。`;
     sys = filterSurrogates(sys);
 
     const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, reasoning: false, messages: [
