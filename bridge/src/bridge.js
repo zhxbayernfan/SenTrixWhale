@@ -320,7 +320,9 @@ async function think(userText, who) {
         + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
     // [FIX-13] 说话人挪到最末尾：4B 模型对开头注意力弱，放远会被角色卡冲掉；
     // 并且明确写死"你不是他"，否则它会把对方的名字当自己的
-    sys += `\n\n【本轮】对话的是 ${_who.name}（${_who.role}，QQ ${who}）。你是工程鲸，不是 ${_who.name}，也不是任何一个人。叫对方时用"${_who.role}"。`;
+    sys += `\n\n【本轮】现在是 ${_who.name}（QQ ${who}）在跟你说话，你要叫他"${_who.role}"。`
+        + `\n你是工程鲸，不是 ${_who.name}，也不是家里任何一个人。`
+        + `\n他要是问"我是谁"，直接答"你是${_who.role}"，别绕、别说"你${_who.role}记忆里的一条鲸"这种怪话。`;
     sys = filterSurrogates(sys);
 
     const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, reasoning: false, messages: [
