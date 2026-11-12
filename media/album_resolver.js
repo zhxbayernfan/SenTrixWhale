@@ -193,6 +193,20 @@ function parseWhen(text, now = new Date()) {
         return mk(y, 1, 1, hour, minute, 'year');
     }
 
+    // 7.5) 公历节日：17年元旦 / 2017国庆 / 圣诞
+    const FESTIVALS = {
+        元旦: [1, 1], 情人节: [2, 14], 妇女节: [3, 8], 劳动节: [5, 1], 儿童节: [6, 1],
+        教师节: [9, 10], 国庆节: [10, 1], 国庆: [10, 1], 平安夜: [12, 24],
+        圣诞: [12, 25], 跨年: [12, 31],
+    };
+    const festKey = Object.keys(FESTIVALS).find((k) => t.includes(k));
+    if (festKey) {
+        const [mo, dd] = FESTIVALS[festKey];
+        const ym = t.match(/(\d{2,4})\s*年/) || t.match(/(?<!\d)((?:19|20)\d{2})(?!\d)/);
+        const y = ym ? fixYear(ym[1]) : now.getFullYear();
+        return mk(y, mo, dd, hour, minute, 'day');
+    }
+
     // 8) 只有月日（补当年）
     m = t.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/);
     if (m) return mk(now.getFullYear(), +m[1], +m[2], hour, minute, 'day');
