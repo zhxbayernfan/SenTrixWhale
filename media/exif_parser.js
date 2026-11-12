@@ -8,10 +8,35 @@ const exifReader = require('exif-reader');
  * @param {string} photoPath - 照片文件路径
  * @returns {Object} EXIF数据对象
  */
+// exif-reader 要的是 APP1 里的 EXIF 段本身（以 "Exif\0\0" 开头），
+// 直接塞整张 JPEG 进来它会抛 "Invalid EXIF data"。原来就是这么错的——
+// 所以 bridge 从来没真正读到过任何 EXIF。
+function extractExifSegment(buffer) {
+    if (!Buffer.isBuffer(buffer) || buffer.length < 4) return null;
+    if (buffer[0] !== 0xFF || buffer[1] !== 0xD8) return null; // 不是 JPEG
+    let offset = 2;
+    while (offset + 4 <= buffer.length) {
+        if (buffer[offset] !== 0xFF) break;
+        const marker = buffer[offset + 1];
+        if (marker === 0xDA || marker === 0xD9) break;       // 图像数据开始
+        const len = buffer.readUInt16BE(offset + 2);
+        if (len < 2) break;
+        if (marker === 0xE1) {                                // APP1
+            const start = offset + 4;
+            const seg = buffer.subarray(start, start + len - 2);
+            if (seg.length > 6 && seg.toString('latin1', 0, 4) === 'Exif') return seg;
+        }
+        offset += 2 + len;
+    }
+    return null;
+}
+
 function parseExif(photoPath) {
     try {
         const buffer = fs.readFileSync(photoPath);
-        const exif = exifReader(buffer);
+        const seg = extractExifSegment(buffer);
+        if (!seg) return null;
+        const exif = exifReader(seg);
         
         return {
             // 原始拍摄时间
@@ -172,6 +197,7 @@ function mergeExifAndUserInput(exifData, userTime, userLocation) {
 
 module.exports = {
     parseExif,
+    extractExifSegment,
     parseRelativeTime,
     mergeExifAndUserInput
 };

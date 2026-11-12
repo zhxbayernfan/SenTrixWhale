@@ -490,6 +490,105 @@ function parseAlbum(text) {
     return '';
 }
 
+// ── 读 EXIF：借 PIL，不借 exif-reader ──
+// exif-reader 对华为写出来的 APP1 段会抛 "Invalid EXIF data"，
+// 而 PIL 能稳定读出 DateTime / Model / GPS IFD。
+const EXIF_PY = `
+import sys, json
+from PIL import Image
+im = Image.open(sys.argv[1])
+ex = im.getexif()
+out = {"dateTime": ex.get(36867) or ex.get(306) or None,
+       "make": ex.get(271), "model": ex.get(272), "gps": None}
+gps = ex.get_ifd(34853) if 34853 in ex else None
+if gps:
+    def dms(v):
+        try:
+            return float(v[0]) + float(v[1]) / 60.0 + float(v[2]) / 3600.0
+        except Exception:
+            return None
+    lat, lon = dms(gps.get(2)), dms(gps.get(4))
+    ok = (lat is not None and lon is not None
+          and lat == lat and lon == lon
+          and -90 <= lat <= 90 and -180 <= lon <= 180
+          and not (abs(lat) < 1e-6 and abs(lon) < 1e-6))
+    if ok:
+        out["gps"] = {"lat": lat, "lon": lon}
+print(json.dumps(out))
+`;
+
+function readExif(filePath) {
+    try {
+        const out = require('child_process').execFileSync(
+            process.env.STW_PYTHON || '/opt/anaconda3/bin/python3',
+            ['-c', EXIF_PY, filePath],
+            { encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'ignore'] },
+        );
+        return JSON.parse(out.trim());
+    } catch (e) {
+        log('[EXIF] PIL 读取失败: ' + e.message);
+        return null;
+    }
+}
+
+// ── 取图：QQ 一条图片消息有多档（原图 / 大图 / 缩略图）──
+// url 指向的是大图档；原图要用 file(md5) 调 /get_image 才拿得到。
+// 拿不到原图再回退 url，不能让整条链路因为取原图失败而断掉。
+async function fetchImageBytes(seg) {
+    const key = seg.file || seg.file_id || '';
+    if (key && !/^https?:/.test(String(key))) {
+        try {
+            const r = await fetch(cfg.napcat.httpUrl + '/get_image', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + cfg.napcat.accessToken,
+                },
+                body: JSON.stringify({ file: key }),
+                signal: AbortSignal.timeout(20000),
+            });
+            if (r.ok) {
+                const j = await r.json();
+                const f = j && j.data && (j.data.file || j.data.path);
+                if (f && String(f).startsWith('base64://')) {
+                    log('[取图] /get_image -> base64');
+                    return Buffer.from(String(f).slice(9), 'base64');
+                }
+                if (f) {
+                    const p = String(f).replace(/^file:\/\//, '');
+                    if (fs.existsSync(p)) {
+                        log('[取图] /get_image -> 本地 ' + p);
+                        return fs.readFileSync(p);
+                    }
+                    log('[取图] /get_image 返回无法读取的路径: ' + p);
+                } else {
+                    log('[取图] /get_image 没有 file 字段: ' + JSON.stringify(j).slice(0, 200));
+                }
+            } else {
+                log('[取图] /get_image HTTP ' + r.status);
+            }
+        } catch (e) {
+            log('[取图] /get_image 失败: ' + e.message);
+        }
+    }
+    const url = seg.url || (typeof seg.file === 'string' && /^https?:/.test(seg.file) ? seg.file : '');
+    if (!url) return null;
+    log('[取图] 回退 url');
+    // 用 curl 而不是 fetch：QQ 的图链偶尔会把 undici 的 body 读取挂死
+    // （signal 触发了也不 reject，整条消息就此消失）。curl 有硬超时。
+    return await new Promise((resolve, reject) => {
+        require('child_process').execFile(
+            'curl', ['-sS', '--max-time', '25', '-L', url],
+            { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 30000 },
+            (err, stdout) => {
+                if (err) return reject(new Error('curl: ' + err.message));
+                if (!stdout || !stdout.length) return reject(new Error('curl: 空响应'));
+                resolve(stdout);
+            },
+        );
+    });
+}
+
 // ---------- 主处理 ----------
 let lastCall = 0;
 async function handle(userText, senderId, dest, imgs) {
@@ -542,32 +641,42 @@ async function handle(userText, senderId, dest, imgs) {
 
     // ── 存图：发图 → 说相册+日期 → 归档并入库 SHW ──────────────────
     if (imgs && imgs.length > 0) {
-        const imgUrl = imgs[0].url || imgs[0].file || '';
-        if (imgUrl && !imgUrl.includes('sticker')) {
+        const seg = imgs[0];
+        log('[存图] image段完整: ' + JSON.stringify(seg).slice(0, 600));
+        const imgUrl = seg.url || seg.file || '';
+        if (imgUrl && !String(imgUrl).includes('sticker')) {
             log('[存图] 收到照片');
             try {
-                const r = await fetch(imgUrl, { signal: AbortSignal.timeout(20000) });
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                const buf = Buffer.from(await r.arrayBuffer());
+                const buf = await fetchImageBytes(seg);
+                if (!buf) throw new Error('取不到图片字节');
 
                 // [EXIF 自动] 如果这张图还带着 EXIF（QQ「原图」可能保留），就不用问用户：
                 // 时间来自 DateTimeOriginal，城市来自 GPS 反查。
                 let autoParsed = null;
+                let exifWhen = null;
                 try {
                     const tmp = require('path').join(require('os').tmpdir(), `stw_${Date.now()}.jpg`);
                     require('fs').writeFileSync(tmp, buf);
-                    const ex = parseExif(tmp);
+                    const ex = readExif(tmp);
                     require('fs').unlinkSync(tmp);
                     if (ex && ex.dateTime) {
                         const m = String(ex.dateTime).match(/(\d{4})[:\-](\d{2})[:\-](\d{2})[ T](\d{2}):(\d{2})/);
                         const when = m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) : null;
-                        const city = ex.gps ? cityFromGps(ex.gps.latitude, ex.gps.longitude) : null;
+                        const city = ex.gps ? cityFromGps(ex.gps.lat, ex.gps.lon) : null; // python 输出的是 lat/lon
                         if (when && city) {
+                            // 只借 resolve 的「地名→相册路径」，时间由 EXIF 给，
+                            // 所以判 cr.path 而不是 cr.ok（cr.ok 还要求文本里有日期，这里没有）
                             const cr = resolveAlbum(city, { homeProvince: (cfg.album && cfg.album.homeProvince) || '广东' });
-                            if (cr.ok) {
-                                autoParsed = { ...cr, when, precision: 'day', fromExif: true, gps: ex.gps };
-                                log(`[EXIF] 自动识别 ${cr.path} ${when.toISOString().slice(0, 10)} (${ex.gps.latitude},${ex.gps.longitude})`);
+                            if (cr.path) {
+                                autoParsed = { ...cr, ok: true, path: cr.path, when, precision: 'day', fromExif: true, gps: ex.gps };
+                                log(`[EXIF] 自动识别 ${cr.path} ${when.getFullYear()}-${when.getMonth() + 1}-${when.getDate()} (${ex.gps.lat},${ex.gps.lon})`);
+                            } else {
+                                log('[EXIF] 地点识别失败: city=' + city + ' path=' + cr.path);
                             }
+                        } else if (when) {
+                            // 有时间没坐标：时间先记下，追问时只问地点
+                            exifWhen = when;
+                            log(`[EXIF] 只拿到时间 ${when.toISOString().slice(0, 19)}，地点仍需口述`);
                         } else {
                             log(`[EXIF] 有数据但不够：time=${!!when} gps=${!!ex.gps}`);
                         }
@@ -588,7 +697,7 @@ async function handle(userText, senderId, dest, imgs) {
                     return;
                 }
 
-                pendingPhoto = { buf, senderId, dest, round: 0, maxRounds: 3, said: (userText || '').trim() };
+                pendingPhoto = { buf, senderId, dest, round: 0, maxRounds: 3, said: (userText || '').trim(), exifWhen };
                 if (userText && userText.trim() && parsedNow.missing.length === 1) {
                     // 说了一半（只缺一样），点名追问，别让他重说
                     const miss = parsedNow.missing.includes('place') ? '相册名' : '日期';
@@ -613,6 +722,13 @@ async function handle(userText, senderId, dest, imgs) {
             homeProvince: (cfg.album && cfg.album.homeProvince) || '广东',
             inPrompt: true,   // 追问中：剩下的词就是相册名
         });
+        // 原图带了拍摄时间：用户只需要说地点，时间不用再问
+        if (pendingPhoto.exifWhen && (!parsed.when || parsed.missing.includes('date'))) {
+            parsed.when = pendingPhoto.exifWhen;
+            parsed.precision = 'day';
+            parsed.missing = parsed.missing.filter((m) => m !== 'date');
+            parsed.ok = parsed.missing.length === 0;
+        }
         pendingPhoto.said = combined;
 
         if (parsed.ok) {
