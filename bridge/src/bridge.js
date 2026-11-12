@@ -3,6 +3,7 @@ const { matchSticker, resolveSticker, takeRoundTicket, resetStickerRound } = req
 const { savePhoto, checkFixedLocation } = require('../../media/photo_manager');
 const { ingestPhoto } = require('../../media/shw_ingest'); // [存图] 归档+补EXIF+入SHW
 const { resolve: resolveAlbum, cityFromGps } = require('../../media/album_resolver');
+const { ask: geoAsk } = require('../../media/geo_lookup');
 const { parseExif } = require('../../media/exif_parser'); // [存图] 一句话→相册路径+时间
 // SenTrixWhale bridge v0.1 — 工程鲸桥接(零依赖, Node>=22)
 // 定位: SHW记忆助手的QQ交互前端 — 对话即记忆输入, 检索即回答, 质检即信任.
@@ -699,12 +700,16 @@ async function handle(userText, senderId, dest, imgs) {
 
                 pendingPhoto = { buf, senderId, dest, round: 0, maxRounds: 3, said: (userText || '').trim(), exifWhen };
                 if (userText && userText.trim() && parsedNow.missing.length === 1) {
-                    // 说了一半（只缺一样），点名追问，别让他重说
-                    const miss = parsedNow.missing.includes('place') ? '相册名' : '日期';
-                    const hint = parsedNow.missing.includes('place') ? '「深圳南山」' : '「2023年4月29日」';
-                    await replyTo(dest, `图收到～ 还差${miss}，比如 ${hint}`, userText);
+                    // 说了一半（只缺一样），点上缺的那一样就行，别让他重说
+                    await replyTo(dest,
+                        parsedNow.missing.includes('place')
+                            ? '啥时候拍的记下了 🐳 还差个地方——在哪儿拍的呀？'
+                            : '地方记下了 🐳 还差个日子——大概什么时候拍的？',
+                        userText);
                 } else {
-                    await replyTo(dest, '收到图了～ 想收进哪本相册、记成哪天？说「深圳南山 2023年4月29日」这样就行。', userText);
+                    await replyTo(dest,
+                        '这张照片收到啦 🐳 要不要跟我说说它？什么时候、在哪儿拍的呀？',
+                        userText);
                 }
             } catch (e) {
                 log('[存图] 下载失败: ' + e.message);
@@ -740,18 +745,28 @@ async function handle(userText, senderId, dest, imgs) {
         // 三轮拒收：第 3 次还说不清就不收了，但留一句"能捡回来"
         if (pendingPhoto.round >= pendingPhoto.maxRounds) {
             pendingPhoto = null;
-            await replyTo(dest, '这张我先不收啦，想存的时候再发一次图，或者跟我说「收回刚才那张」🐳', userText);
+            await replyTo(dest, '那这张我先替你放着，不着急 🐳 哪天想起来了，把图再发我一次，或者跟我说一句「收回刚才那张」，我再给它安家。', userText);
             return;
         }
-        const miss = parsed.missing.includes('place') && parsed.missing.includes('date')
-            ? '相册名和日期'
-            : parsed.missing.includes('place') ? '相册名' : '日期';
-        const hint = parsed.missing.includes('place') && parsed.missing.includes('date')
-            ? '「深圳南山 2023年4月29日」'
+        const both = parsed.missing.includes('place') && parsed.missing.includes('date');
+        const tryText = both ? '「深圳南山 2023年4月29日」'
             : parsed.missing.includes('place') ? '「深圳南山」' : '「2023年4月29日」';
-        await replyTo(dest, `还差${miss}～ 比如 ${hint}`, userText);
+        await replyTo(dest,
+            both ? `没关系，慢慢想～ 像这样说一句就好：${tryText}`
+                : `还差${parsed.missing.includes('place') ? '在哪儿拍的' : '哪天拍的'}～ 比如 ${tryText}`,
+            userText);
         return;
     }
+
+    // [地理问答] 本地地理库能直接答的，就不烧模型（4B 调工具不靠谱，本地判更快更准）
+    try {
+        const geo = geoAsk(userText);
+        if (geo && geo.ok && geo.text) {
+            chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: geo.text });
+            await replyTo(dest, geo.text, userText);
+            return;
+        }
+    } catch (e) { log('[地理] 查询失败: ' + e.message); }
 
     if (tryMemoryWrite(userText)) {
         await replyTo(dest, '记住了  已入库并生成抽查问答。');

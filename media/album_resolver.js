@@ -11,100 +11,11 @@
 
 const BRANCH = { LOCAL: '本地省', NATION: '全国', GLOBAL: '全球' };
 
-// ── 省级行政区（33）──────────────────────────────────────────────
-const PROVINCES = [
-    '北京', '天津', '河北', '山西', '内蒙古', '辽宁', '吉林', '黑龙江',
-    '上海', '江苏', '浙江', '安徽', '福建', '江西', '山东', '河南',
-    '湖北', '湖南', '广东', '广西', '海南', '重庆', '四川', '贵州',
-    '云南', '西藏', '陕西', '甘肃', '青海', '宁夏', '新疆',
-    '香港', '澳门', '台湾',
-];
+const { lookupCn, lookupWorld, matchAll } = require('./geo_lookup');
 
-// ── 地级市 → 省（重点在广东，其余取省会与常见市）────────────────
-const CITIES = {
-    广东: ['广州', '深圳', '珠海', '汕头', '佛山', '韶关', '湛江', '肇庆', '江门', '茂名',
-        '惠州', '梅州', '汕尾', '河源', '阳江', '清远', '东莞', '中山', '潮州', '揭阳', '云浮'],
-    浙江: ['杭州', '宁波', '温州', '嘉兴', '湖州', '绍兴', '金华', '衢州', '舟山', '台州', '丽水'],
-    江苏: ['南京', '无锡', '徐州', '常州', '苏州', '南通', '连云港', '淮安', '盐城', '扬州', '镇江', '泰州', '宿迁'],
-    陕西: ['西安', '铜川', '宝鸡', '咸阳', '渭南', '延安', '汉中', '榆林', '安康', '商洛'],
-    河北: ['石家庄', '唐山', '秦皇岛', '邯郸', '邢台', '保定', '张家口', '承德', '沧州', '廊坊', '衡水'],
-    山东: ['济南', '青岛', '淄博', '枣庄', '东营', '烟台', '潍坊', '济宁', '泰安', '威海', '日照', '临沂', '德州', '聊城', '滨州', '菏泽'],
-    河南: ['郑州', '开封', '洛阳', '平顶山', '安阳', '鹤壁', '新乡', '焦作', '濮阳', '许昌', '漯河', '三门峡', '南阳', '商丘', '信阳', '周口', '驻马店'],
-    四川: ['成都', '自贡', '攀枝花', '泸州', '德阳', '绵阳', '广元', '遂宁', '内江', '乐山', '南充', '眉山', '宜宾', '广安', '达州', '雅安', '巴中', '资阳'],
-    湖北: ['武汉', '黄石', '十堰', '宜昌', '襄阳', '鄂州', '荆门', '孝感', '荆州', '黄冈', '咸宁', '随州'],
-    湖南: ['长沙', '株洲', '湘潭', '衡阳', '邵阳', '岳阳', '常德', '张家界', '益阳', '郴州', '永州', '怀化', '娄底'],
-    福建: ['福州', '厦门', '莆田', '三明', '泉州', '漳州', '南平', '龙岩', '宁德'],
-    安徽: ['合肥', '芜湖', '蚌埠', '淮南', '马鞍山', '淮北', '铜陵', '安庆', '黄山', '滁州', '阜阳', '宿州', '六安', '亳州', '池州', '宣城'],
-    江西: ['南昌', '景德镇', '萍乡', '九江', '新余', '鹰潭', '赣州', '吉安', '宜春', '抚州', '上饶'],
-    辽宁: ['沈阳', '大连', '鞍山', '抚顺', '本溪', '丹东', '锦州', '营口', '阜新', '辽阳', '盘锦', '铁岭', '朝阳', '葫芦岛'],
-    云南: ['昆明', '曲靖', '玉溪', '保山', '昭通', '丽江', '普洱', '临沧'],
-    广西: ['南宁', '柳州', '桂林', '梧州', '北海', '防城港', '钦州', '贵港', '玉林', '百色', '贺州', '河池', '来宾', '崇左'],
-};
-
-// ── 区县 → 市（只做本地省 + 少数重点城市；不全是故意的）─────────
-const DISTRICTS = {
-    // 深圳
-    福田区: '深圳', 福田: '深圳',
-    罗湖区: '深圳', 罗湖: '深圳',
-    南山区: '深圳', 南山: '深圳',
-    盐田区: '深圳', 盐田: '深圳',
-    宝安区: '深圳', 宝安: '深圳',
-    龙岗区: '深圳', 龙岗: '深圳',
-    龙华区: '深圳', 龙华: '深圳',
-    坪山区: '深圳', 坪山: '深圳',
-    光明区: '深圳', 光明: '深圳',
-    大鹏新区: '深圳', 大鹏: '深圳',
-    // 广州
-    越秀区: '广州', 越秀: '广州',
-    荔湾区: '广州', 荔湾: '广州',
-    海珠区: '广州', 海珠: '广州',
-    天河区: '广州', 天河: '广州',
-    白云区: '广州', 白云: '广州',
-    黄埔区: '广州', 黄埔: '广州',
-    番禺区: '广州', 番禺: '广州',
-    花都区: '广州', 花都: '广州',
-    南沙区: '广州', 南沙: '广州',
-    从化区: '广州', 从化: '广州',
-    增城区: '广州', 增城: '广州',
-    // 珠海
-    香洲区: '珠海', 香洲: '珠海',
-    斗门区: '珠海', 斗门: '珠海',
-    金湾区: '珠海', 金湾: '珠海',
-    // 佛山
-    禅城区: '佛山', 禅城: '佛山',
-    南海区: '佛山', 南海: '佛山',
-    顺德区: '佛山', 顺德: '佛山',
-    三水区: '佛山', 三水: '佛山',
-    高明区: '佛山', 高明: '佛山',
-    // 东莞/中山 是直筒子市，不设区，街镇直接挂在市下
-};
-
-// ── 国家 → 洲（跨国照片少，够用即可）────────────────────────────
-const COUNTRIES = {
-    德国: '欧洲', 法国: '欧洲', 英国: '欧洲', 意大利: '欧洲', 西班牙: '欧洲',
-    荷兰: '欧洲', 瑞士: '欧洲', 奥地利: '欧洲', 捷克: '欧洲', 希腊: '欧洲',
-    葡萄牙: '欧洲', 瑞典: '欧洲', 挪威: '欧洲', 丹麦: '欧洲', 芬兰: '欧洲',
-    俄罗斯: '欧洲', 波兰: '欧洲', 匈牙利: '欧洲', 冰岛: '欧洲', 爱尔兰: '欧洲',
-    日本: '亚洲', 韩国: '亚洲', 泰国: '亚洲', 新加坡: '亚洲', 马来西亚: '亚洲',
-    越南: '亚洲', 柬埔寨: '亚洲', 老挝: '亚洲', 缅甸: '亚洲', 印度: '亚洲',
-    印尼: '亚洲', 菲律宾: '亚洲', 阿联酋: '亚洲', 土耳其: '亚洲', 以色列: '亚洲',
-    美国: '北美洲', 加拿大: '北美洲', 墨西哥: '北美洲',
-    巴西: '南美洲', 阿根廷: '南美洲', 智利: '南美洲', 秘鲁: '南美洲',
-    澳大利亚: '大洋洲', 新西兰: '大洋洲',
-    埃及: '非洲', 南非: '非洲', 摩洛哥: '非洲', 肯尼亚: '非洲',
-};
-
-// 国名 → 首都/常见城市（可选，用户没说市就不写）
-const COUNTRY_CITIES = {
-    德国: ['柏林', '慕尼黑', '汉堡', '法兰克福', '科隆', '斯图加特'],
-    日本: ['东京', '大阪', '京都', '北海道', '名古屋', '福冈'],
-    法国: ['巴黎', '里昂', '马赛', '尼斯'],
-    英国: ['伦敦', '爱丁堡', '曼彻斯特'],
-    美国: ['纽约', '洛杉矶', '旧金山', '西雅图', '波士顿', '芝加哥'],
-    泰国: ['曼谷', '清迈', '普吉'],
-    新加坡: ['新加坡'],
-    韩国: ['首尔', '釜山', '济州'],
-};
+const CN = require('../data/geo/cn.json');
+const CITIES = Object.fromEntries(Object.entries(CN).map(([p, cs]) => [p, Object.keys(cs)]));
+const PROVINCES = Object.keys(CN);
 
 // 指令词 / 干扰词：解析前先剥掉
 const NOISE = ['收进画廊', '收进相册', '收进来', '收进', '存进', '存到', '存起来', '存一下',
@@ -112,7 +23,7 @@ const NOISE = ['收进画廊', '收进相册', '收进来', '收进', '存进', 
 
 function stripNoise(text) {
     let s = String(text || '');
-    s = s.replace(/@\d+/g, ' ');        // @4 这种
+    s = s.replace(/@\d+/g, ' ');
     for (const w of NOISE) s = s.split(w).join(' ');
     return s.replace(/\s+/g, ' ').trim();
 }
@@ -289,52 +200,70 @@ function stripTime(text) {
 }
 
 // ── 地点解析 ───────────────────────────────────────────────────
-// 返回 { branch, path, place } 或 { branch:null }
+// 国内：省 / 市 / 区 三级齐（来自内置地理库）
+// 国外：洲 / 国 / 用户说得出的一层（市或州），末层宽松
 function parsePlace(text, homeProvince = '广东', inPrompt = false) {
     const t = stripTime(stripNoise(text));
-    const hit = (name) => t.includes(name);
+    if (!t) return { branch: null, path: null, place: null };
 
-    // ① 国名 → 全球/洲/国(/市)
-    for (const [country, continent] of Object.entries(COUNTRIES)) {
-        if (!hit(country)) continue;
-        const cities = COUNTRY_CITIES[country] || [];
-        const city = cities.find(hit) || '';
-        const parts = [BRANCH.GLOBAL, continent, country];
-        if (city) parts.push(city);
-        return { branch: 'global', path: parts.join('/'), place: { country, continent, city } };
+    const { cn: cnHits, world: wHits } = matchAll(t);
+
+    // ── 国内：级别组装 ──
+    // 规则：有市命中时，看有没有「属于该市」的区命中 → 有则到区；否则到市。
+    // 这样「深圳南山」能到区，「西安」不会被吉林辽源的「西安区」抢走。
+    const cities = cnHits.filter((x) => x.level === 'city');
+    const districts = cnHits.filter((x) => x.level === 'district');
+    let picked = null;
+
+    for (const c of cities) {
+        const d = districts.find((x) => x.city === c.city && x.province === c.province);
+        if (d) { picked = d; break; }
+    }
+    if (!picked) {
+        const preferred = homeProvince
+            ? districts.find((x) => x.province === homeProvince)
+            : null;
+        picked = (cities.length && cities[0]) || preferred || districts[0]
+            || cnHits.find((x) => x.level === 'province') || null;
     }
 
-    // ② 区 → 市（区名只在词典里出现才算，避免"南山"这种误判）
-    for (const [districtKey, city] of Object.entries(DISTRICTS)) {
-        if (!hit(districtKey)) continue;
-        const province = provinceOfCity(city);
-        if (!province) continue;
-        const d = districtKey.replace(/区$/, '');
-        if (province === homeProvince) {
-            return { branch: 'local', path: [province, city, d].join('/'), place: { province, city, district: d } };
+    if (picked) {
+        if (picked.province === homeProvince) {
+            const parts = [picked.province];
+            if (picked.city) parts.push(picked.city);
+            if (picked.district && picked.district !== picked.city) parts.push(picked.district); // 直筒子市（东莞/中山）区名与市同名，不重复
+            return {
+                branch: 'local',
+                path: parts.join('/'),
+                place: { province: picked.province, city: picked.city, district: picked.district },
+            };
         }
-        return { branch: 'nation', path: [BRANCH.NATION, province, city].join('/'), place: { province, city, district: d } };
+        const parts = [BRANCH.NATION, picked.province];
+        if (picked.city) parts.push(picked.city);
+        return {
+            branch: 'nation',
+            path: parts.join('/'),
+            place: { province: picked.province, city: picked.city, district: picked.district },
+        };
     }
 
-    // ③ 市 → 省
-    for (const [province, cities] of Object.entries(CITIES)) {
-        const city = cities.find(hit);
-        if (!city) continue;
-        if (province === homeProvince) {
-            return { branch: 'local', path: [province, city].join('/'), place: { province, city } };
-        }
-        return { branch: 'nation', path: [BRANCH.NATION, province, city].join('/'), place: { province, city } };
+    // ── 国外：国 + 用户说得出的一层（市或州）──
+    const country = wHits.find((x) => x.kind === 'country');
+    const region = wHits.find((x) => x.kind !== 'country');
+    const anyWorld = country || region;
+    if (anyWorld) {
+        const cz = country || (region && { country: region.country, continent: region.continent, name: region.country });
+        const parts = [BRANCH.GLOBAL, cz.continent, cz.country];
+        const reg = region && region.country === cz.country ? region.name : null;
+        if (reg) parts.push(reg);
+        return {
+            branch: 'global',
+            path: parts.join('/'),
+            place: { country: cz.country, continent: cz.continent, region: reg },
+        };
     }
 
-    // ④ 省
-    const province = PROVINCES.find(hit);
-    if (province) {
-        if (province === homeProvince) return { branch: 'local', path: province, place: { province } };
-        return { branch: 'nation', path: [BRANCH.NATION, province].join('/'), place: { province } };
-    }
-
-    // ⑤ 剩下来的话当成用户自定义地名：不拒绝，按原话建
-    //    但只有带明确指令（收进/存进/画廊/相册）时才敢猜，否则"随便吧"会被当成地名
+    // ── 未归类：带指令或追问中才敢把剩下的话当地名 ──
     const directive = inPrompt || /[收存].{0,3}(进|到|入)|画廊|相册/.test(String(text));
     const guess = directive ? t.replace(/[，,。.、\s]+/g, '').slice(0, 12) : '';
     if (guess.length >= 2) {
@@ -342,6 +271,7 @@ function parsePlace(text, homeProvince = '广东', inPrompt = false) {
     }
     return { branch: null, path: null, place: null };
 }
+
 function provinceOfCity(city) {
     for (const [p, cs] of Object.entries(CITIES)) if (cs.includes(city)) return p;
     if (city === '东莞' || city === '中山') return '广东';
