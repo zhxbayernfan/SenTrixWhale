@@ -104,7 +104,7 @@ try { mem = JSON.parse(fs.readFileSync(MEM, 'utf8')); } catch { mem = {}; }
 function saveMem() { const t = MEM + '.tmp'; fs.writeFileSync(t, JSON.stringify(mem, null, 2)); fs.renameSync(t, MEM); }
 
 const chatHist={};function getHist(w){return(chatHist[w]||[]).slice(-10)}function addHist(w,u,r){if(!chatHist[w])chatHist[w]=[];chatHist[w].push({role:'user',content:u},{role:'assistant',content:r})}
-let shwStats={total:0};async function fetchSHWStats(){if(!cfg.shw||!cfg.shw.enabled)return;try{const d=await(await fetch(cfg.shw.apiBase+'/api/v1/assets?limit=1000')).json();shwStats.total=(d.items||[]).length;if(d.has_more){const d2=await(await fetch(cfg.shw.apiBase+'/api/v1/assets?limit=1000&offset=1000')).json();shwStats.total+=(d2.items||[]).length}log('[SHW统计] '+shwStats.total)}catch(e){log('[SHW统计] 失败')}}
+let shwStats={total:0};async function fetchSHWStats(){if(!cfg.shw||!cfg.shw.enabled)return;try{const d=await(await fetch(cfg.shw.apiBase+'/api/v1/assets?limit=1000',{signal:AbortSignal.timeout(20000)})).json();shwStats.total=(d.items||[]).length;if(d.has_more){const d2=await(await fetch(cfg.shw.apiBase+'/api/v1/assets?limit=1000&offset=1000',{signal:AbortSignal.timeout(20000)})).json();shwStats.total+=(d2.items||[]).length}log('[SHW统计] '+shwStats.total)}catch(e){log('[SHW统计] 失败')}}
 function familySum(){try{const CL=path.join(ROOT,'state','chat_log_sentrix.jsonl');if(!fs.existsSync(CL))return'';const byU={};fs.readFileSync(CL,'utf8').trim().split('\n').filter(l=>l.startsWith('{')).slice(-20).forEach(l=>{try{const d=JSON.parse(l),q=String(d.who||'');if(!byU[q])byU[q]=[];if(d.in)byU[q].push(d.in.slice(0,30))}catch(e){}});return Object.entries(byU).map(([q,m])=>{const k=Object.entries(mem).find(([kk])=>kk===q);return'- '+(k?k[0]:q)+': '+m.join('; ')}).join('\n')}catch(e){return''}}
 
 
@@ -179,7 +179,7 @@ async function timelineDays() {
         const byDate = {};
         let total = Infinity;
         for (let off = 0; off < 600 && Object.keys(byDate).length < total; off += 200) {
-            const r = await fetch(cfg.shw.apiBase + '/api/v1/timeline?limit=200&offset=' + off);
+            const r = await fetch(cfg.shw.apiBase + '/api/v1/timeline?limit=200&offset=' + off, { signal: AbortSignal.timeout(20000) });
             if (!r.ok) break;
             const j = await r.json();
             total = j.total || 0;
@@ -216,7 +216,7 @@ async function shwSearch(query) {
         // 于是它仍会把 2023 年的照片当"上周"返回. 这里不信任服务端过滤, 取回后本地按日期硬筛.
         const _u = cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(query) + '&top_k=10'
             + (tr ? '&time_range=' + encodeURIComponent(tr.label) : '');
-        const r = await fetch(_u);
+        const r = await fetch(_u, { signal: AbortSignal.timeout(20000) });
         if (!r.ok) { log('[SHW] HTTP ' + r.status); return null; }
         const j = await r.json();
         const seen = new Set();
@@ -339,6 +339,7 @@ async function think(userText, who) {
     log('[FETCH] bodyLen:'+_fetchBody.length+' histLen:'+getHistory(who).length+' histJSON:'+JSON.stringify(getHistory(who)).slice(0,200));
     log('[think] 准备调用llama: ' + cfg.ds.baseUrl + '/chat/completions');
     const r = await fetch(cfg.ds.baseUrl + '/chat/completions', {
+        signal: AbortSignal.timeout(90000), // 模型请求最多 90 秒，避免 event loop 被挂住
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.ds.apiKey },
         body: _fetchBody.replace('"messages"', '"chat_template_kwargs":{"enable_thinking":false},"messages"'), // [FIX-5]
@@ -460,7 +461,7 @@ function connect() {
 }
 // 看门狗: 90s无脉强连
 setInterval(() => {
-    if (ws && Date.now() - lastWsData > 90000) { try { ws.close(); } catch {} }
+    if (ws && Date.now() - lastWsData > 45000) { try { ws.close(); } catch {} }
 }, 30000);
 
 // [存图] 从一句话里认相册名：广东 / 广东相册 / 收进浙江
@@ -664,7 +665,7 @@ async function replyTo(dest, text, userInput) {
 
 // ---------- 启动 ----------
 if (!process.env.STW_NO_CONNECT) {
-    log("[启动] SenTrixWhale bridge | 护栏=10元/500次 | SHW检索=启用 | 模型=本地");
+    log("[启动] SenTrixWhale bridge pid=" + process.pid + " | 护栏=10元/500次 | SHW检索=启用 | 模型=本地");
     fetchSHWStats();
     connect();
 } else {
