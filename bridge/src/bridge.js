@@ -496,6 +496,36 @@ async function handle(userText, senderId, dest, imgs) {
             return;
         }
     }
+    // 入库并回话（带字直存 / 追问后存 共用）
+    async function doIngest(buf, parsed, dest, said) {
+        try {
+            const r = await ingestPhoto(buf, {
+                album: parsed.path,
+                when: parsed.when,
+                precision: parsed.precision,
+                said,
+                place: parsed.place,
+                scopeId: parsed.path,
+                shwBase: (cfg.shw && cfg.shw.apiBase) || 'http://127.0.0.1:8191',
+            });
+            if (r.ok) {
+                log('[存图] ' + r.relFile + ' -> ' + r.assetId + ' (' + parsed.precision + ')');
+                const day = r.when.slice(0, 10).replace(/:/g, '-');
+                const tail = parsed.precision === 'day' ? day
+                    : parsed.precision === 'month' ? `${day.slice(0, 7)}（只到月份）`
+                        : `${day.slice(0, 4)} 年（只到年份）`;
+                await replyTo(dest,
+                    `收好了 🐳 收进《${parsed.path}》，记作 ${tail}。${r.dedup ? '（这张之前收过，没重复占地方）' : ''}`,
+                    said);
+            } else {
+                await replyTo(dest, '存的时候出了岔子：' + String(r.error).slice(0, 60), said);
+            }
+        } catch (e) {
+            log('[存图] 出错: ' + e.message);
+            await replyTo(dest, '存图出错了，再试一次？', said);
+        }
+    }
+
     // ── 存图：发图 → 说相册+日期 → 归档并入库 SHW ──────────────────
     if (imgs && imgs.length > 0) {
         const imgUrl = imgs[0].url || imgs[0].file || '';
@@ -505,8 +535,25 @@ async function handle(userText, senderId, dest, imgs) {
                 const r = await fetch(imgUrl, { signal: AbortSignal.timeout(20000) });
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 const buf = Buffer.from(await r.arrayBuffer());
-                pendingPhoto = { buf, senderId, dest, round: 0, maxRounds: 3 };
-                await replyTo(dest, '收到图了～ 想收进哪本相册、记成哪天？说「广东 2023年4月29日」这样就行。', userText);
+
+                // [带字直存] 图和话在同一条消息里，能解析就直接收，不追问
+                const parsedNow = resolveAlbum(userText || '', {
+                    homeProvince: (cfg.album && cfg.album.homeProvince) || '广东',
+                });
+                if (userText && userText.trim() && parsedNow.ok) {
+                    await doIngest(buf, parsedNow, dest, userText);
+                    return;
+                }
+
+                pendingPhoto = { buf, senderId, dest, round: 0, maxRounds: 3, said: (userText || '').trim() };
+                if (userText && userText.trim() && parsedNow.missing.length === 1) {
+                    // 说了一半（只缺一样），点名追问，别让他重说
+                    const miss = parsedNow.missing.includes('place') ? '相册名' : '日期';
+                    const hint = parsedNow.missing.includes('place') ? '「深圳南山」' : '「2023年4月29日」';
+                    await replyTo(dest, `图收到～ 还差${miss}，比如 ${hint}`, userText);
+                } else {
+                    await replyTo(dest, '收到图了～ 想收进哪本相册、记成哪天？说「深圳南山 2023年4月29日」这样就行。', userText);
+                }
             } catch (e) {
                 log('[存图] 下载失败: ' + e.message);
                 await replyTo(dest, '这张图没下下来，麻烦再发一次～', userText);
@@ -517,37 +564,16 @@ async function handle(userText, senderId, dest, imgs) {
 
     if (pendingPhoto && pendingPhoto.senderId === senderId) {
         pendingPhoto.round = (pendingPhoto.round || 0) + 1;
-        const parsed = resolveAlbum(userText, {
+        // 累积多轮原话再解析：先说时间、后补地点也能拼起来
+        const combined = `${pendingPhoto.said || ''} ${userText}`.trim();
+        const parsed = resolveAlbum(combined, {
             homeProvince: (cfg.album && cfg.album.homeProvince) || '广东',
+            inPrompt: true,   // 追问中：剩下的词就是相册名
         });
+        pendingPhoto.said = combined;
 
         if (parsed.ok) {
-            try {
-                const r = await ingestPhoto(pendingPhoto.buf, {
-                    album: parsed.path,
-                    when: parsed.when,
-                    precision: parsed.precision,
-                    said: userText,
-                    place: parsed.place,
-                    scopeId: parsed.path,
-                    shwBase: (cfg.shw && cfg.shw.apiBase) || 'http://127.0.0.1:8191',
-                });
-                if (r.ok) {
-                    log('[存图] ' + r.relFile + ' -> ' + r.assetId + ' (' + parsed.precision + ')');
-                    const day = r.when.slice(0, 10).replace(/:/g, '-');
-                    const tail = parsed.precision === 'day' ? `${day}`
-                        : parsed.precision === 'month' ? `${day.slice(0, 7)}（只到月份）`
-                            : `${day.slice(0, 4)} 年（只到年份）`;
-                    await replyTo(dest,
-                        `收好了 🐳 收进《${parsed.path}》，记作 ${tail}。${r.dedup ? '（这张之前收过，没重复占地方）' : ''}`,
-                        userText);
-                } else {
-                    await replyTo(dest, '存的时候出了岔子：' + String(r.error).slice(0, 60), userText);
-                }
-            } catch (e) {
-                log('[存图] 出错: ' + e.message);
-                await replyTo(dest, '存图出错了，再试一次？', userText);
-            }
+            await doIngest(pendingPhoto.buf, parsed, dest, userText);
             pendingPhoto = null;
             return;
         }

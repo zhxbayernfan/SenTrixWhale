@@ -245,7 +245,7 @@ function stripTime(text) {
 
 // ── 地点解析 ───────────────────────────────────────────────────
 // 返回 { branch, path, place } 或 { branch:null }
-function parsePlace(text, homeProvince = '广东') {
+function parsePlace(text, homeProvince = '广东', inPrompt = false) {
     const t = stripTime(stripNoise(text));
     const hit = (name) => t.includes(name);
 
@@ -289,7 +289,9 @@ function parsePlace(text, homeProvince = '广东') {
     }
 
     // ⑤ 剩下来的话当成用户自定义地名：不拒绝，按原话建
-    const guess = t.replace(/[，,。.、\s]+/g, '').slice(0, 12);
+    //    但只有带明确指令（收进/存进/画廊/相册）时才敢猜，否则"随便吧"会被当成地名
+    const directive = inPrompt || /[收存].{0,3}(进|到|入)|画廊|相册/.test(String(text));
+    const guess = directive ? t.replace(/[，,。.、\s]+/g, '').slice(0, 12) : '';
     if (guess.length >= 2) {
         return { branch: 'global', path: [BRANCH.GLOBAL, '未归类', guess].join('/'), place: { unclassified: guess }, guessed: true };
     }
@@ -309,7 +311,7 @@ function resolve(text, opts = {}) {
     const now = opts.now instanceof Date ? opts.now : new Date();
     const homeProvince = opts.homeProvince || '广东';
     const { date, precision } = parseWhen(text, now);
-    const place = parsePlace(text, homeProvince);
+    const place = parsePlace(text, homeProvince, !!opts.inPrompt);
     const missing = [];
     if (!place.path) missing.push('place');
     if (!date) missing.push('date');
