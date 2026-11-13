@@ -605,7 +605,6 @@ async function handle(userText, senderId, dest, imgs) {
             const reply = '记忆库里现在有' + count.total + '张照片呢～'; // [FIX-2]
             // 记录chatLog
             chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: reply });
-            logChat(senderId, userText, reply, lastUsage);
         await replyTo(dest, reply, userText);
             return;
         }
@@ -778,13 +777,11 @@ async function handle(userText, senderId, dest, imgs) {
     try {
         const reply = await think(userText, senderId);
         addHistory(senderId, userText, reply);
-        logChat(senderId, userText, reply, lastUsage);
         await replyTo(dest, reply, userText);
     } catch (e) {
         log('[错误] ' + e.message);
         // 错误回复也记录chatLog
         chatLog({ event: 'chat', who: senderId, dest: 'private', in: userText, out: '处理出错了, 请稍后再试。', error: e.message });
-        logChat(senderId, userText, '处理出错了, 请稍后再试。', null);
         await replyTo(dest, '处理出错了, 请稍后再试。');
     }
 }
