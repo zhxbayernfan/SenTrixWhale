@@ -39,3 +39,9 @@ Thumbs.db
 
 # 本地工作规则（不进版本库）
 AGENTS.md
+
+# 合并自远程 473323f（chore: 清理大文件）
+*.key
+.env
+.npm/
+__pycache__/
