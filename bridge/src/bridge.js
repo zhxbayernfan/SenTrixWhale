@@ -219,13 +219,32 @@ async function shwSearch(query) {
     if (!cfg.shw || !cfg.shw.enabled) return null;  // 未启用: 走本地记忆
     try {
         const tr = timeRangeOf(query);
+        // [地图检索] 问题里带地名就按相册过滤：问"杭州"→ scope=全国/浙江/杭州。
+        // SHW 的 scope 是精确匹配（不支持前缀），所以只在解析出完整路径时才带。
+        let scope = '';
+        try {
+            const pl = resolveAlbum(query, { homeProvince: (cfg.album && cfg.album.homeProvince) || '广东' });
+            if (pl && pl.path) scope = pl.path;
+        } catch (e) { /* 解析失败就不带 scope */ }
+
         // [FIX-9] SHW 的 time_range 过滤在本机会抛 "naive/aware datetime" 错, metadata 通道降级,
         // 于是它仍会把 2023 年的照片当"上周"返回. 这里不信任服务端过滤, 取回后本地按日期硬筛.
-        const _u = cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(query) + '&top_k=10'
-            + (tr ? '&time_range=' + encodeURIComponent(tr.label) : '');
-        const r = await fetch(_u, { signal: AbortSignal.timeout(20000) });
+        const buildUrl = (sc) => cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(query) + '&top_k=10'
+            + (tr ? '&time_range=' + encodeURIComponent(tr.label) : '')
+            + (sc ? '&scope_id=' + encodeURIComponent(sc) : '');
+
+        let r = await fetch(buildUrl(scope), { signal: AbortSignal.timeout(20000) });
         if (!r.ok) { log('[SHW] HTTP ' + r.status); return null; }
-        const j = await r.json();
+        let _j = await r.json();
+        // 带 scope 一条都没有时回退到全库，避免"地名解析对了但相册是空的"直接答没存
+        if (scope && (!_j.items || !_j.items.length)) {
+            log('[SHW] scope=' + scope + ' 无结果，回退全库');
+            r = await fetch(buildUrl(''), { signal: AbortSignal.timeout(20000) });
+            if (!r.ok) { log('[SHW] HTTP ' + r.status); return null; }
+            _j = await r.json();
+        }
+        if (scope) log('[SHW] 按相册过滤: ' + scope);
+        const j = _j;   // body 已经消费过，不能再 json() 一次
         const seen = new Set();
         const items = (j.items || []).filter(it => {   // [FIX-6] 同一张图会返回多条, 按文件名去重
             const a = it.asset || {};
@@ -242,7 +261,7 @@ async function shwSearch(query) {
         }));
         log(`[SHW] q="${query}"${tr ? ' 区间=' + tr.from + '~' + tr.to : ''} 原始${(j.items || []).length}条 去重/筛选后${items.length}条`);
         const events = tr ? await eventsInRange(tr.from, tr.to) : [];
-        return { count: items.length, items, events };
+        return { count: items.length, items, events, scope };
     } catch (e) { log('[SHW] 检索失败: ' + e.message); return null; }
 }
 
@@ -304,7 +323,8 @@ async function think(userText, who) {
         const times = hits.items.map(x => x && x.time).filter(Boolean).sort();
         const span = times.length ? `，照片时间 ${times[0]} 到 ${times[times.length - 1]}` : '';
         const lines = (hits.events || []).map(e => `- ${e.date} ${e.place}：${e.summary}`).join('\n');
-        memBlock = `【记忆证据】${lines ? '这几天你自己记下的事：\n' + lines + '\n' : ''}命中 ${hits.count} 条照片${span}。只用上面这些事实回答，可以说"我记得"，不许补充证据之外的人名、地点、情节。`;
+        const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
+        memBlock = `【记忆证据】${lines ? '这几天你自己记下的事：\n' + lines + '\n' : ''}命中 ${hits.count} 条照片${span}${album}。只用上面这些事实回答，可以说"我记得"，不许补充证据之外的人名、地点、情节。`;
     } else {
         // [FIX-8] 检索为空时必须直说没存到, 不许拿"温馨瞬间"之类的空话糊弄
         // [FIX-11] 模型不知道今天几号, 会把"没检索到"解释成"还没到", 必须把日期和话术都钉死
