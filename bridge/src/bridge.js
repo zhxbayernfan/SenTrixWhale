@@ -169,6 +169,16 @@ function timeRangeOf(q) {  // [FIX-7] 时间词 -> SHW 的 time_range + 本地�
         const b = new Date(Date.UTC(yy, mm, 1));
         return { label: `${yy}年${mm}月`, from: iso(a), to: iso(new Date(b - 864e5)) };
     };
+    // 「今天 / 刚才」——现场拍完当场问「今天拍的」，得能查到
+    const local = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    if (/今天|今日|刚才|刚刚|这会儿/.test(q)) {
+        const t = new Date();
+        return { label: `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日`, from: local(t), to: local(t) };
+    }
+    if (/昨天|昨日/.test(q)) {
+        const t = new Date(Date.now() - 864e5);
+        return { label: `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日`, from: local(t), to: local(t) };
+    }
     if (/去年/.test(q)) return { label: `${y - 1}年`, from: `${y - 1}-01-01`, to: `${y - 1}-12-31` };
     if (/今年/.test(q)) return { label: `${y}年`, from: `${y}-01-01`, to: `${y}-12-31` };
     if (/上个月/.test(q)) return mk(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1);
