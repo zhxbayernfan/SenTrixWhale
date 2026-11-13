@@ -23,7 +23,7 @@ mkdir -p "$PROJ/logs"
 say() { printf '[%s] %s\n' "$(date '+%F %T')" "$*"; }
 
 running() {
-    pgrep -f "$NODE .*bridge/src/bridge\.js" >/dev/null 2>&1
+    pgrep -f "node .*bridge/src/bridge\.js" >/dev/null 2>&1
 }
 
 start() {

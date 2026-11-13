@@ -1,5 +1,28 @@
 {
   "dependencies": {
-    "exif-reader": "^2.0.3"
-  }
+    "exif-reader": "^2.0.3",
+    "oicq": "^2.3.1"
+  },
+  "name": "sentrixwhale",
+  "version": "1.0.0",
+  "description": "给家庭记忆助手装上QQ对话入口的工程。记忆库在用户本地,对话过QQ,模型可切换。",
+  "main": "test_bridge.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhxbayernfan/SenTrixWhale.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/zhxbayernfan/SenTrixWhale/issues"
+  },
+  "homepage": "https://github.com/zhxbayernfan/SenTrixWhale#readme"
 }
