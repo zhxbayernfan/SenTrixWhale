@@ -23,7 +23,7 @@ const NOISE = ['收进画廊', '收进相册', '收进来', '收进', '存进', 
 
 function stripNoise(text) {
     let s = String(text || '');
-    s = s.replace(/@\d+/g, ' ');
+    s = s.replace(/@[^\s，,。.、]+/g, ' ');   // 剥所有 @提及（群里 @4 / @Zhx的QQ小肥鱼 都算），不当地名
     for (const w of NOISE) s = s.split(w).join(' ');
     return s.replace(/\s+/g, ' ').trim();
 }
@@ -264,10 +264,17 @@ function parsePlace(text, homeProvince = '广东', inPrompt = false) {
     }
 
     // ── 未归类：带指令或追问中才敢把剩下的话当地名 ──
-    const directive = inPrompt || /[收存].{0,3}(进|到|入)|画廊|相册/.test(String(text));
-    const guess = directive ? t.replace(/[，,。.、\s]+/g, '').slice(0, 12) : '';
-    if (guess.length >= 2) {
-        return { branch: 'global', path: [BRANCH.GLOBAL, '未归类', guess].join('/'), place: { unclassified: guess }, guessed: true };
+    // 只在「明确要存」时才把剩下的话当地名。
+    // 「画廊」「相册」这种词在闲聊里到处都是，不能当触发词——否则
+    // 「那，咱们的画廊呢」会被解析成 全球/未归类/那咱们的呢。
+    const directive = inPrompt || /[收存].{0,4}(进|到|入)|存进|存到/.test(String(text));
+    // 地名候选只留中文，剥掉代词/虚词，2-8 字才认。
+    // 「那咱们的画廊呢」剥完是空的——它本来就不是地名。
+    const raw = directive ? t.replace(/[^\u4e00-\u9fa5]/g, '') : '';
+    const guess = raw.replace(/(这些|那些|这个|那个|咱们|我们|你们|他们|什么|怎么|哪里|这儿|那儿|这|那|的|了|呢|吗|吧)/g, '');
+    const clean = guess.length >= 2 && guess.length <= 8 ? guess : '';
+    if (clean) {
+        return { branch: 'global', path: [BRANCH.GLOBAL, '未归类', clean].join('/'), place: { unclassified: clean }, guessed: true };
     }
     return { branch: null, path: null, place: null };
 }
