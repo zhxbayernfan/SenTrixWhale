@@ -117,7 +117,7 @@ function getHistory(who) {
     // [FIX-12] 原来直接返回空数组"避免混淆"，结果每轮都是失忆的：
     // 多聊几句就接不上，两个号更是分不清。按 QQ 号隔离 + 截断，才是正确做法。
     const h = chatHistory[who] || [];
-    return h.slice(-6).map((m) => ({
+    return h.slice(-12).map((m) => ({
         role: m.role,
         content: String(m.content || '').slice(0, 150),
     }));
@@ -348,13 +348,20 @@ async function think(userText, who) {
 
     const _d = new Date();
     const _who = getWhoNote(who);
-    let sys = `今天是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日。\n` + roleText() + identityNote + chatNote + '\n\n' + memBlock
-        + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。';
+    const _hh = String(new Date().getHours()).padStart(2, '0');
+    const _mm = String(new Date().getMinutes()).padStart(2, '0');
+    let sys = `现在是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日 ${_hh}:${_mm}。问到几点就按这个答，不知道就说不清楚，**不许编时间**。\n` + roleText() + identityNote + chatNote + '\n\n' + memBlock
+        + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。'
+        + '\n\n三条硬规矩:'
+        + '\n1. 遇到不认识的人名/昵称（比如"小肥屿""西米老姐"），先问"这是谁呀"，别顺着用、别当成你认识的人。'
+        + '\n2. 别重复上一轮的说法。同一个意思换个讲法，别把"下次记得拍照发我"当万能句。'
+        + '\n3. 只有照片、家庭里发生的事才说"我记下来/存进相册"。别人聊的新闻、比赛、八卦，不归你管，别往记忆库里塞。';
     // [FIX-13] 说话人挪到最末尾：4B 模型对开头注意力弱，放远会被角色卡冲掉；
     // 并且明确写死"你不是他"，否则它会把对方的名字当自己的
-    sys += `\n\n【本轮】现在是 ${_who.name}（QQ ${who}）在跟你说话，你要叫他"${_who.role}"。`
+    sys += `\n\n【本轮】现在是 ${_who.name}（QQ ${who}）在跟你说话。称呼他「${_who.name}」——就是这两个字，不加"哥""弟"。`
         + `\n你是工程鲸，不是 ${_who.name}，也不是家里任何一个人。`
-        + `\n他要是问"我是谁"，直接答"你是${_who.role}"，别绕、别说"你${_who.role}记忆里的一条鲸"这种怪话。`;
+        + `\n**不许叫"哥""弟""姐""叔"这类亲属称呼**，你没资格攀亲；直接用名字或"你"。`
+        + `\n他要是问"我是谁"，答"你是${_who.name}"。`;
     sys = filterSurrogates(sys);
 
     const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, reasoning: false, messages: [
