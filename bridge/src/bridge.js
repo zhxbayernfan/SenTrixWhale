@@ -485,9 +485,14 @@ function connect() {
             log('[WS] 解析后: post_type=' + m.post_type + ' user_id=' + m.user_id);
             if (m.post_type !== 'message') return;
             const text = (m.message || []).filter(p => p.type === 'text').map(p => p.data.text).join('');
-            const imgs = (m.message || []).filter(p => p.type === 'image').map(p => p.data).slice(0, 3);
+            const _allImgs = (m.message || []).filter(p => p.type === 'image').map(p => p.data).slice(0, 3);
+            // [表情包分辨] OneBot 的 sub_type: 0=普通图片, 1=表情；summary 里还会写"[动画表情]"。
+            // 表情包不该进相册（既不是回忆，也没有 EXIF），单独认出来。
+            const isSticker = (d) => String(d.sub_type ?? 0) === '1' || /动画表情|\[表情\]/.test(String(d.summary || ''));
+            const stickers = _allImgs.filter(isSticker);
+            const imgs = _allImgs.filter(d => !isSticker(d));
             // 允许纯图片消息通过
-            if ((!text.trim() && imgs.length === 0) || !isKnown(m.user_id)) return;
+            if ((!text.trim() && imgs.length === 0 && stickers.length === 0) || !isKnown(m.user_id)) return;
             const dest = m.message_type === 'group' ? { kind: 'group', id: String(m.group_id), atQQ: m.user_id } : { kind: 'private', id: m.user_id };
             const atMe = (m.message || []).some(p => p.type === 'at' && String(p.data.qq) === String(m.self_id));
             if (m.message_type === 'group' && !atMe) return;
@@ -503,7 +508,13 @@ function connect() {
                 processedMessages.delete(firstKey);
             }
             
-            log('[WS] 准备调用handle: text=' + text.trim().slice(0,30) + ' user=' + m.user_id + ' imgs=' + imgs.length);
+            // 纯表情包：不经过存图流程，也不让模型瞎猜，直接收下
+            if (stickers.length && imgs.length === 0 && !text.trim()) {
+                log('[WS] 收到表情包 → 不计入相册');
+                replyTo(dest, '这个表情我收着啦 🐳').catch(() => {});
+                return;
+            }
+            log('[WS] 准备调用handle: text=' + text.trim().slice(0,30) + ' user=' + m.user_id + ' imgs=' + imgs.length + ' 表情包=' + stickers.length);
             handle(text.trim(), m.user_id, dest, imgs).catch(e => log('[handle错误] ' + e.message));
         } catch (e) { log('[WS解析] ' + e.message); }
     };
