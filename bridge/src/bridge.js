@@ -97,11 +97,16 @@ function costOf(u) {
     const hit = u.prompt_cache_hit_tokens || 0;
     return (miss * 1 + hit * 0.02 + (u.completion_tokens || 0) * 4) / 1e6;
 }
-// 测试模式不计数、不限额——否则几百条投喂会把日额度打爆，
-// 后面的回答全变成「今天电量不足」，测试数据就废了（1116 踩过）。
-const overLimit = () => process.env.STW_TEST
-    ? false
-    : (daily.calls >= cfg.guard.maxCallsPerDay || daily.costYuan >= cfg.guard.dailyLimitYuan);
+// 护栏只在「真花钱」的时候才该拦。
+// 家人鲸接 DS API，按次计费，所以要次数+金额双限；
+// 工程鲸接本地 llama（127.0.0.1），调用不花钱，次数限额只会在长对话/测试时误伤
+// （1116 实测：500 次限额把 44 条回答变成了「今天电量不足」）。
+const isLocalModel = () => /127\.0\.0\.1|localhost/.test(String((cfg.ds && cfg.ds.baseUrl) || ''));
+const overLimit = () => {
+    if (process.env.STW_TEST) return false;      // 测试不拦
+    if (isLocalModel()) return false;            // 本地模型不花钱，不拦
+    return daily.calls >= cfg.guard.maxCallsPerDay || daily.costYuan >= cfg.guard.dailyLimitYuan;
+};
 
 // ---------- 记忆: memory.json(结构化长期记忆) ----------
 const MEM = path.join(ROOT, 'state', 'memory.json');
