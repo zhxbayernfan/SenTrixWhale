@@ -622,7 +622,22 @@ async function fetchImageBytes(seg) {
 
 // ---------- 主处理 ----------
 let lastCall = 0;
+// [并发控制] llama 是 --parallel 1，一次只能算一条。
+// 用户连发时（混沌测试 38 条 / 演示时领导连问）会同时打进来，
+// 后面的排队到 90 秒超时，用户就看到「处理出错了」。
+// 这里排成串行队列：同一时刻只跑一条，其余等着，不超时。
+let _handleChain = Promise.resolve();
+let _queued = 0;
+
 async function handle(userText, senderId, dest, imgs) {
+    _queued++;
+    if (_queued > 1) log(`[队列] 前面还有 ${_queued - 1} 条在等`);
+    const run = _handleChain.then(() => _handleInner(userText, senderId, dest, imgs));
+    _handleChain = run.catch(() => {}).finally(() => { _queued--; });
+    return run;
+}
+
+async function _handleInner(userText, senderId, dest, imgs) {
     // 身份识别：使用WHO_NOTE字典
     const currentUserQQ = String(senderId);
     const whoInfo = getWhoNote(currentUserQQ);
