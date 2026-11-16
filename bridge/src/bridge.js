@@ -128,6 +128,22 @@ function addHistory(who, userText, reply) {
     chatHistory[who].push({ role: 'assistant', content: reply });
 }
 
+// ---------- 她自己的名字（用户起的，按人存） ----------
+// 「取决于你怎么叫我」这句话要当真：用户说了名字，就得记住并用上。
+function myNameFor(qq) { return mem['name_' + qq] || ''; }
+function catchName(userText, qq) {
+    const t = String(userText || '');
+    // 仅认「叫你X」「喊你X」「以后叫你X」——不碰「我叫X」（那是用户的自我介绍）
+    const m = t.match(/(?:以后|往后|就)?(?:叫|喊)你\s*(?:叫)?\s*([\u4e00-\u9fa5A-Za-z0-9]{1,8})/);
+    if (!m) return null;
+    const name = m[1].replace(/[吧呀啊哦呢嘛]$/u, '');
+    if (!name || name.length < 1) return null;
+    mem['name_' + qq] = name;
+    saveMem();
+    log('[名字] ' + qq + ' 给我起的名字: ' + name);
+    return name;
+}
+
 const memText = () => Object.keys(mem).length ? Object.entries(mem).map(([k, v]) => `- ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n') : '(记忆库还空着)';
 // ---------- 全家对话摘要(最近3条/人) ----------
 function familyChatSummary() {
@@ -361,6 +377,11 @@ async function think(userText, who) {
         + '\n3. 只有照片、家庭里发生的事才说"我记下来/存进相册"。别人聊的新闻、比赛、八卦，不归你管，别往记忆库里塞。';
     // [FIX-13] 说话人挪到最末尾：4B 模型对开头注意力弱，放远会被角色卡冲掉；
     // 并且明确写死"你不是他"，否则它会把对方的名字当自己的
+    const _myName = myNameFor(who);
+    log('[名字注入] who=' + who + ' name=' + (_myName || '(无)'));
+    sys += _myName
+        ? `\n\n【你的名字】你叫「${_myName}」。这是 ${_who.name} 给你起的。有人问"你是谁/你叫什么"，答"我是${_myName}"，别提"还没起名"。`
+        : `\n\n【你的名字】你还没有名字。有人问"你是谁/你叫什么"，答"工程鲸只是代号，真名还空着，你给起一个？"`
     sys += `\n\n【本轮】现在是 ${_who.name}（QQ ${who}）在跟你说话。称呼他「${_who.name}」——就是这两个字，不加"哥""弟"。`
         + `\n你是工程鲸，不是 ${_who.name}，也不是家里任何一个人。`
         + `\n**不许叫"哥""弟""姐""叔"这类亲属称呼**，你没资格攀亲；直接用名字或"你"。`
@@ -833,6 +854,9 @@ async function _handleInner(userText, senderId, dest, imgs) {
             userText);
         return;
     }
+
+    // 用户给我起名字（"以后叫你小鲸"）——记下来，之后每轮都注入
+    const _newName = catchName(userText, senderId);
 
     // [地理问答] 本地地理库能直接答的，就不烧模型（4B 调工具不靠谱，本地判更快更准）
     try {
