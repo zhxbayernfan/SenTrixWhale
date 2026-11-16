@@ -102,7 +102,19 @@ function parseWhen(text, now = new Date()) {
     }
 
     // 4) 相对日：今天/昨天/前天/N 天前
-    if (/今天|今日/.test(t)) return mk(now.getFullYear(), now.getMonth() + 1, now.getDate(), hour, minute, 'day');
+    // 「刚才/刚刚/方才」也是今天——目标点名要支持的说法
+    if (/今天|今日|刚才|刚刚|方才|这会儿|今儿/.test(t)) return mk(now.getFullYear(), now.getMonth() + 1, now.getDate(), hour, minute, 'day');
+    // 「上周三 / 周三 / 礼拜三 / 星期日」
+    const wd = t.match(/(上|本|这)?(?:周|星期|礼拜)([一二三四五六日天1-7])/);
+    if (wd) {
+        const map = { '一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'日':0,'天':0,'1':1,'2':2,'3':3,'4':4,'5':5,'6':6,'7':0 };
+        const want = map[wd[2]];
+        let d = new Date(now);
+        const diff = (d.getDay() - want + 7) % 7;
+        d = shiftDays(d, -diff);                       // 本周那一天
+        if (wd[1] === '上') d = shiftDays(d, -7);      // 上周再退七天
+        return mk(d.getFullYear(), d.getMonth() + 1, d.getDate(), hour, minute, 'day');
+    }
     if (/昨天|昨日/.test(t)) { const d = shiftDays(now, -1); return mk(d.getFullYear(), d.getMonth() + 1, d.getDate(), hour, minute, 'day'); }
     if (/前天/.test(t)) { const d = shiftDays(now, -2); return mk(d.getFullYear(), d.getMonth() + 1, d.getDate(), hour, minute, 'day'); }
     m = t.match(/(\d{1,3})\s*天前/);
@@ -192,7 +204,7 @@ function stripTime(text) {
     s = s.replace(/\d{1,3}\s*天前/g, ' ');
     s = s.replace(/\d{1,2}\s*个?月前/g, ' ');
     s = s.replace(/\d{1,2}\s*年前/g, ' ');
-    s = s.replace(/今天|今日|昨天|昨日|前天|去年|前年|今年/g, ' ');
+    s = s.replace(/今天|今日|今儿|刚才|刚刚|方才|这会儿|昨天|昨日|前天|去年|前年|今年|(?:上|本|这)?(?:周|星期|礼拜)[一二三四五六日天1-7]/g, ' ');
     s = s.replace(/\d{2,4}\s*年/g, ' ');          // 只有年份
     s = s.replace(/的?\s*\d{1,2}\s*[日号]/g, ' '); // 残余"的12日"
     s = s.replace(/^的|的$/g, ' ');
