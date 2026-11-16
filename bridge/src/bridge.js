@@ -97,7 +97,11 @@ function costOf(u) {
     const hit = u.prompt_cache_hit_tokens || 0;
     return (miss * 1 + hit * 0.02 + (u.completion_tokens || 0) * 4) / 1e6;
 }
-const overLimit = () => daily.calls >= cfg.guard.maxCallsPerDay || daily.costYuan >= cfg.guard.dailyLimitYuan;
+// 测试模式不计数、不限额——否则几百条投喂会把日额度打爆，
+// 后面的回答全变成「今天电量不足」，测试数据就废了（1116 踩过）。
+const overLimit = () => process.env.STW_TEST
+    ? false
+    : (daily.calls >= cfg.guard.maxCallsPerDay || daily.costYuan >= cfg.guard.dailyLimitYuan);
 
 // ---------- 记忆: memory.json(结构化长期记忆) ----------
 const MEM = path.join(ROOT, 'state', 'memory.json');
