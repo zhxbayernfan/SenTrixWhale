@@ -352,6 +352,9 @@ async function think(userText, who) {
     const _mm = String(new Date().getMinutes()).padStart(2, '0');
     let sys = `现在是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日 ${_hh}:${_mm}。问到几点就按这个答，不知道就说不清楚，**不许编时间**。\n` + roleText() + identityNote + chatNote + '\n\n' + memBlock
         + '\n\n回答规则: 像老朋友聊天——轻松、自然、简短。记得的事情就说"我记得/好像有印象"，不记得就老实说"这个我好像没存"。不报数字、不甩文件名、不列清单、不说"检索到"。'
+        + '\n\n先分清两种问题:'
+        + '\n· 查记忆（"我上次在哪拍的""2023年4月""杭州的照片"）→ 去记忆库找，有就说，没有就说"这个我没存到"。'
+        + '\n· 闲聊（"晚上吃啥""好累""你觉得呢""今天天气"）→ **正常聊，别提"存没存"三个字，也别往照片上引**。你不是只能谈记忆，你也会聊天。'
         + '\n\n三条硬规矩:'
         + '\n1. 遇到不认识的人名/昵称（比如"小肥屿""西米老姐"），先问"这是谁呀"，别顺着用、别当成你认识的人。'
         + '\n2. 别重复上一轮的说法。同一个意思换个讲法，别把"下次记得拍照发我"当万能句。'
@@ -361,7 +364,9 @@ async function think(userText, who) {
     sys += `\n\n【本轮】现在是 ${_who.name}（QQ ${who}）在跟你说话。称呼他「${_who.name}」——就是这两个字，不加"哥""弟"。`
         + `\n你是工程鲸，不是 ${_who.name}，也不是家里任何一个人。`
         + `\n**不许叫"哥""弟""姐""叔"这类亲属称呼**，你没资格攀亲；直接用名字或"你"。`
-        + `\n他要是问"我是谁"，答"你是${_who.name}"。`;
+        + `\n他要是问"我是谁"，答"你是${_who.name}"。`
+        + (who === '1309459509' ? `\n他问"我哥是谁"，答"你哥是 zhx1"（他不是 zhx1，他是 zhx2）。` : '')
+        + (who === '1303425363' ? `\n他问"我弟是谁"，答"你弟是 zhx2"（他不是 zhx2，他是 zhx1）。` : '');
     sys = filterSurrogates(sys);
 
     const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, reasoning: false, messages: [
@@ -377,7 +382,10 @@ async function think(userText, who) {
     
     const _fetchBody = JSON.stringify({ 
         model: cfg.ds.model, 
-        max_tokens: 2048, 
+        max_tokens: 2048,
+        temperature: 0.7,
+        repetition_penalty: 1.15,   // 默认 1.0 = 不惩罚，模型会字面复述上文
+        top_p: 0.9,
         thinking: { type: 'disabled' },
         reasoning: false,
         messages: [
@@ -454,7 +462,12 @@ async function countPhotos() {
     try {
         const photoDir = path.join(ROOT, 'media', 'photos');
         if (fs.existsSync(photoDir)) {
-            const allPhotos = fs.readdirSync(photoDir).filter(f => f.endsWith('.jpg'));
+            // 照片按相册分在 省/市/区 的子目录里，readdirSync 只数顶层会恒为 0
+            const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+                const full = path.join(dir, e.name);
+                return e.isDirectory() ? walk(full) : [e.name];
+            });
+            const allPhotos = walk(photoDir).filter(f => f.endsWith('.jpg'));
             const newPhotos = allPhotos.filter(f => f.startsWith('photo_'));
             const framePhotos = allPhotos.filter(f => f.startsWith('frame'));
             return { total: allPhotos.length, new: newPhotos.length, frames: framePhotos.length };
@@ -644,6 +657,7 @@ let lastCall = 0;
 // 用户连发时（混沌测试 38 条 / 演示时领导连问）会同时打进来，
 // 后面的排队到 90 秒超时，用户就看到「处理出错了」。
 // 这里排成串行队列：同一时刻只跑一条，其余等着，不超时。
+const _lastNum = new Map();   // 每个用户上一条是不是数字消息
 let _handleChain = Promise.resolve();
 let _queued = 0;
 
@@ -829,6 +843,20 @@ async function _handleInner(userText, senderId, dest, imgs) {
             return;
         }
     } catch (e) { log('[地理] 查询失败: ' + e.message); }
+
+    // [纯数字] 群里常见的编号/序号消息（16、17、35…），没有内容可答。
+    // 交给模型只会得到「16 啥意思呀」这种模板句。只确认一次就够了。
+    if (/^\d{1,3}$/.test(userText.trim())) {
+        const key = 'num_' + senderId;
+        const last = _lastNum.get(key);
+        _lastNum.set(key, userText.trim());
+        // 纯数字（"16" "35"）本身没有内容，第一次也别让模型猜——
+        // 它会把 16 当成日期说"现在是 16 点"。
+        void last;
+        chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: '收到' });
+        await replyTo(dest, '收到。', userText);
+        return;
+    }
 
     if (tryMemoryWrite(userText)) {
         await replyTo(dest, '记住了  已入库并生成抽查问答。');
