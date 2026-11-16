@@ -1003,7 +1003,17 @@ async function sendHumanPaced(reply, dest) {
     }
 }
 
+// [口癖后处理] 4B 对「禁止某句话」的指令遵从度很低——prompt 里写了两遍
+// 「别追问现在想聊点啥」，它照用。改成发送前直接删掉。
+function stripCatchphrase(t) {
+    return String(t || '')
+        .replace(/[，,。.\s]*(现在|那现在|接下来)?(想聊点啥|想聊点什么|聊点啥|还有啥想说的|有什么想聊的)[？?！!。]*$/u, '')
+        .replace(/[，,。.\s]+$/u, '')
+        .trim() || '嗯。';
+}
+
 async function replyTo(dest, text, userInput) {
+    text = stripCatchphrase(text);
     const msg = [{ type: 'text', data: { text } }];
     // 匹配表情包
     const stickerFile = matchSticker(text, userInput);
