@@ -383,7 +383,11 @@ async function think(userText, who) {
         + '\n· 让你**做事**（讲个笑话、讲个故事、推荐点啥、夸夸我、猜猜看）→ **直接做，别说"没存"**。'
         + '\n  你又不是只会查库——夸人就夸一句；**讲笑话必须把笑话讲完**（两句话也行），'
         + '\n  绝对不许只说"好，给你讲个短的：" 就停住，那是半成品。'
-        + '\n· 跟自己无关的话题（游戏、比赛、新闻、八卦、别人家的事）→ **一句话说明不归你管就停，不展开、不给条件、不提照片**。'
+        + '\n· **先分清「无关」到底指什么**（1116 实测：DS 也把「晚上吃啥」当无关话题拒了，是分档写错了）:'
+        + '\n  - 无关 = **外面的世界**（游戏赛事、新闻、别人的八卦、转会、股价）→ 一句话带过，不展开。'
+        + '\n  - **关于对方本人的闲聊不算无关**：累不累、吃没吃、心情怎么样、有什么打算、'
+        + '\n    周末想干嘛——这些是聊天，正常接，别拒绝、别说"不归我管"。'
+        + '\n  - 拿不准时就当它**有关系**，正常聊；宁可多聊一句，别把人推走。'
         + '\n  例："这个我帮不上。" / "我只管家里照片。"'
         + '\n  **绝对不要**写"要是你有照片就……""发我图就……"这种条件句——'
         + '\n  那会变成万能模板，连分隔线都能接成"发照片"（1116 实测，24 条这么答的）。'
@@ -508,6 +512,37 @@ function tryMemoryWrite(userText) {
 }
 
 // ---------- 照片计数功能（实时读取目录） ----------
+// ---------- 看图：本地 Qwen 走 mmproj，2 秒出一句描述 ----------
+// llama 启动时带了 --mmproj，视觉能力一直没用上。实测 640px 图 2.1 秒/张。
+async function describeImage(buf) {
+    try {
+        const os = require('os'), fsx = require('fs');
+        const tmp = path.join(os.tmpdir(), `vw_${Date.now()}.jpg`);
+        fsx.writeFileSync(tmp, buf);
+        const small = path.join(os.tmpdir(), `vs_${Date.now()}.jpg`);
+        // 原图可能 7MB，base64 后更大；先缩到 640px（sips 是 macOS 自带）
+        try { require('child_process').execFileSync('sips', ['-Z', '640', tmp, '--out', small], { stdio: 'ignore', timeout: 15000 }); }
+        catch { fsx.copyFileSync(tmp, small); }
+        const b64 = fsx.readFileSync(small).toString('base64');
+        try { fsx.unlinkSync(tmp); fsx.unlinkSync(small); } catch {}
+        const r = await fetch(String(cfg.ds.baseUrl).replace(/\/$/, '') + '/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: cfg.ds.model, max_tokens: 120, temperature: 0.5,
+                chat_template_kwargs: { enable_thinking: false },
+                messages: [{ role: 'user', content: [
+                    { type: 'text', text: '这张照片里有什么？一句话说清楚，30 字以内，不要"这张照片"这种开头。' },
+                    { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + b64 } },
+                ]}],
+            }),
+            signal: AbortSignal.timeout(60000),
+        });
+        const j = await r.json();
+        return String(j.choices?.[0]?.message?.content || '').trim();
+    } catch (e) { log('[VLM] 看图失败: ' + e.message); return ''; }
+}
+
 async function countPhotos() {
     try {
         const photoDir = path.join(ROOT, 'media', 'photos');
