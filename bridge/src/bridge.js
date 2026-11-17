@@ -71,9 +71,13 @@ const log = (s) => {
     fs.appendFileSync(LOG, `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())} ${s}\n`);
 };
 
-// ---------- 护栏: 双计数 + 下沉模式 + 日账单 ----------
+// ---------- 用量统计: 每日调用次数与 token ----------
+// 工程鲸接的是本地 Qwen，不产生 API 费用，所以没有费用护栏。
+// 原来那套 10 元 / 500 次是从家人鲸搬来的——它调 DS API，按钱和次数拦才成立；
+// 放在本地模型上只会误伤（1116 实测：500 次限额把 44 条回答变成了「今天电量不足」）。
+// 这里只留计数，用来看使用量。进程巡检、超时兜底、消息去重都在别处，不受影响。
 const DAILY = path.join(ROOT, 'state', 'daily.json');
-let daily = { date: '', calls: 0, cachedIn: 0, plainIn: 0, out: 0, costYuan: 0 };
+let daily = { date: '', calls: 0, cachedIn: 0, plainIn: 0, out: 0 };
 
 // 照片等待状态
 let pendingPhoto = null; // {url, senderId, round: 0, maxRounds: 3}
@@ -81,32 +85,16 @@ const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(
 
 function loadDaily() {
     try { daily = JSON.parse(fs.readFileSync(DAILY, 'utf8')); } catch (e) { log('[告警] daily读取失败: ' + e.message); }
+    if (daily && 'costYuan' in daily) delete daily.costYuan;   // 旧版留下的假账，本地模型不该有钱
     if (daily.date !== today()) {
-        if (daily.date) log(`[账单] ${daily.date} 调用${daily.calls}次 花费${daily.costYuan.toFixed(4)}元`);
-        daily = { date: today(), calls: 0, cachedIn: 0, plainIn: 0, out: 0, costYuan: 0 };
+        if (daily.date) log(`[用量] ${daily.date} 调用${daily.calls}次 入${(daily.cachedIn || 0) + (daily.plainIn || 0)} 出${daily.out || 0}`);
+        daily = { date: today(), calls: 0, cachedIn: 0, plainIn: 0, out: 0 };
         saveDaily();
     }
 }
 function saveDaily() { fs.writeFileSync(DAILY, JSON.stringify(daily)); }
 
-function costOf(u) {
-    // 本地模型(apiKey为空)免费，云端模型按DS费率计费
-    if (!cfg.ds.apiKey) return 0;  // 本地qwen3.5，零成本
-    // 粗估(谷价): miss 1元/M, hit 0.02元/M, out 4元/M
-    const miss = u.prompt_cache_miss_tokens || u.prompt_tokens || 0;
-    const hit = u.prompt_cache_hit_tokens || 0;
-    return (miss * 1 + hit * 0.02 + (u.completion_tokens || 0) * 4) / 1e6;
-}
-// 护栏只在「真花钱」的时候才该拦。
-// 家人鲸接 DS API，按次计费，所以要次数+金额双限；
-// 工程鲸接本地 llama（127.0.0.1），调用不花钱，次数限额只会在长对话/测试时误伤
-// （1116 实测：500 次限额把 44 条回答变成了「今天电量不足」）。
-const isLocalModel = () => /127\.0\.0\.1|localhost/.test(String((cfg.ds && cfg.ds.baseUrl) || ''));
-const overLimit = () => {
-    if (process.env.STW_TEST) return false;      // 测试不拦
-    if (isLocalModel()) return false;            // 本地模型不花钱，不拦
-    return daily.calls >= cfg.guard.maxCallsPerDay || daily.costYuan >= cfg.guard.dailyLimitYuan;
-};
+// （费用护栏已移除：本地模型不按次、不按元计费，理由见上方。）
 
 // ---------- 记忆: memory.json(结构化长期记忆) ----------
 const MEM = path.join(ROOT, 'state', 'memory.json');
@@ -355,11 +343,7 @@ async function think(userText, who) {
     loadDaily();
     // 过滤输入中的surrogate字符
     userText = filterSurrogates(userText);
-    log('[think] 护栏检查: calls=' + daily.calls + ' cost=' + daily.costYuan);
-    if (overLimit()) {
-        log(`[下沉] 调用${daily.calls}次 花费${daily.costYuan.toFixed(4)}元, 超线拒答`);
-        return '今天电量不足, 明天再见 ';
-    }
+    log('[think] 今日累计调用: ' + daily.calls);
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
     const hits = await shwSearch(userText);
     const famSum = familyChatSummary();
@@ -476,9 +460,8 @@ async function think(userText, who) {
     daily.cachedIn += u.prompt_cache_hit_tokens || 0;
     daily.plainIn += u.prompt_cache_miss_tokens || u.prompt_tokens || 0;
     daily.out += u.completion_tokens || 0;
-    daily.costYuan += costOf(u);
     saveDaily();
-    log(`[对话] 入${u.prompt_tokens || 0}(缓${u.prompt_cache_hit_tokens || 0}) 出${u.completion_tokens || 0} 累计${daily.costYuan.toFixed(4)}元`);
+    log(`[对话] 入${u.prompt_tokens || 0}(缓${u.prompt_cache_hit_tokens || 0}) 出${u.completion_tokens || 0} 今日第${daily.calls}次`);
 
     let reply = (m.content || '').trim();
     // 过滤emoji
@@ -486,7 +469,7 @@ async function think(userText, who) {
     if (!reply) throw new Error('空content(思考挤占?)');
 
     // 记录对话到chatLog
-    chatLog({ event: 'chat', who: who, dest: 'private', in: userText, out: reply, usage: u, cost: costOf(u) });
+    chatLog({ event: 'chat', who: who, dest: 'private', in: userText, out: reply, usage: u });
     
     // 持久化memory.json（每次对话后保存）
     try {
@@ -1074,7 +1057,7 @@ async function replyTo(dest, text, userInput) {
 
 // ---------- 启动 ----------
 if (!process.env.STW_NO_CONNECT) {
-    log("[启动] SenTrixWhale bridge pid=" + process.pid + " | 护栏=10元/500次 | SHW检索=启用 | 模型=本地");
+    log("[启动] SenTrixWhale bridge pid=" + process.pid + " | 模型=本地(无API费用) | SHW检索=启用");
     fetchSHWStats();
     connect();
 } else {
