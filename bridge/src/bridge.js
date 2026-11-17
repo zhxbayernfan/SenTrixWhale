@@ -794,6 +794,10 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 }
                 const head = `收好了 🐳 收进《${parsed.path}》，记作 ${tail}。${r.dedup ? '（这张之前收过，没重复占地方）' : ''}`;
                 await replyTo(dest, vision ? `${head}\n这张里是：${vision}` : head, said);
+            } else if (r.undated) {
+                // 解析不出时间就不入库。以前 ingestPhoto 会用 new Date() 兜底，
+                // 把"补传的图"记成当天拍摄，还写进 EXIF 覆盖掉原始时间（见巴伐利亚那条）。
+                await replyTo(dest, r.error, said);
             } else {
                 await replyTo(dest, '存的时候出了岔子：' + String(r.error).slice(0, 60), said);
             }

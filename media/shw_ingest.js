@@ -58,7 +58,20 @@ function exifStamp(d) {
  */
 async function ingestPhoto(buf, opts) {
     const album = String(opts.album || '未分类').replace(/^\/+|\/+$/g, '').trim() || '未分类';
-    const when = opts.when instanceof Date ? opts.when : new Date();
+    // 时间必须来自用户口述或原图 EXIF。拿不到就不入库。
+    // 以前这里是 `opts.when instanceof Date ? opts.when : new Date()`，后果是：
+    // 补传的图被记成"今天拍的"，而且这个假时间还会被写进 JPEG 的 DateTimeOriginal，
+    // 原始时间从此不可逆地丢失（2026-11-17 巴伐利亚那条就是被这么污染的）。
+    // 产品口径：时间解析不出来就留空，绝不猜"今天"。
+    const when = opts.when instanceof Date ? opts.when : null;
+    if (!when) {
+        return {
+            ok: false,
+            undated: true,
+            album,
+            error: '这张还没记准时间，先没入库——跟我说说它是哪年拍的，我再收。',
+        };
+    }
     const scopeId = opts.scopeId || album;
     const dir = path.join(PHOTO_ROOT, album);
     fs.mkdirSync(dir, { recursive: true });
@@ -70,7 +83,8 @@ async function ingestPhoto(buf, opts) {
 
     fs.writeFileSync(rawPath, buf);
 
-    // 补写 EXIF；PIL 不可用时退化为原图（SHW 会用导入时间，仍然能存下来）
+    // 补写 EXIF；PIL 不可用时退化为原图——此时 SHW 会用自己的导入时间，
+    // 和文件名里的时间对不上。保留退化路径，但要留日志，不静默地错。
     let exifOk = true;
     try {
         execFileSync(PY, ['-c', PY_EXIF, rawPath, outPath, exifStamp(when)], { stdio: 'pipe' });
@@ -123,9 +137,20 @@ async function ingestPhoto(buf, opts) {
 module.exports = { ingestPhoto, parseWhen, PHOTO_ROOT };
 
 // 自测: node media/shw_ingest.js media/photos/xx.jpg 广东 2023-04-29
+// 时间必须显式给出。以前这里是 `parseWhen(whenText) || new Date()`，
+// 一个解析失败就会被当成"现在拍的"写进库里和 EXIF 里。
 if (require.main === module) {
     const [file, album = '未分类', whenText = ''] = process.argv.slice(2);
+    if (!whenText.trim()) {
+        console.error('用法: node media/shw_ingest.js <图片> <相册> <时间>\n时间必须显式给出，不猜。');
+        process.exit(2);
+    }
+    const when = parseWhen(whenText);
+    if (!when) {
+        console.error('时间解析不出来: ' + whenText + '\n支持的形式见 media/album_resolver.js 的用例。');
+        process.exit(2);
+    }
     const buf = fs.readFileSync(file);
-    ingestPhoto(buf, { album, when: parseWhen(whenText) || new Date(), shwBase: 'http://127.0.0.1:8191' })
+    ingestPhoto(buf, { album, when, shwBase: 'http://127.0.0.1:8191' })
         .then((r) => { console.log(JSON.stringify(r, null, 2)); process.exit(r.ok ? 0 : 1); });
 }
