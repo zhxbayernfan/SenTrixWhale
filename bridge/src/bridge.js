@@ -421,6 +421,8 @@ async function think(userText, who) {
         + `\n他要是问"我是谁"，答"你是${_who.name}"。`
         + (who === '1309459509' ? `\n他问"我哥是谁"，答"你哥是 zhx1"（他不是 zhx1，他是 zhx2）。` : '')
         + (who === '1303425363' ? `\n他问"我弟是谁"，答"你弟是 zhx2"（他不是 zhx2，他是 zhx1）。` : '');
+    // 4B 对开头注意力弱，放末尾（和「说话人」那条同一个经验）
+    if (_lastPhotoHint) sys = sys + '\n\n' + _lastPhotoHint;
     sys = filterSurrogates(sys);
 
     const _bodyStr = JSON.stringify({ model: cfg.ds.model, max_tokens: 2048, thinking: { type: 'disabled' }, reasoning: false, messages: [
@@ -743,6 +745,9 @@ let lastCall = 0;
 // 后面的排队到 90 秒超时，用户就看到「处理出错了」。
 // 这里排成串行队列：同一时刻只跑一条，其余等着，不超时。
 const _lastNum = new Map();   // 每个用户上一条是不是数字消息
+// 每个人最近存的那张图（含看图描述）——用户追问「这张」「刚才那张」时要用
+const _lastPhoto = new Map();
+let _lastPhotoHint = '';   // handle 里查出来，think 里注入（跨函数）
 let _handleChain = Promise.resolve();
 let _queued = 0;
 
@@ -792,6 +797,9 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 // [看图] 存完让模型看一眼，回一句"这张里是什么"——本地 2 秒/张
                 let vision = '';
                 try { vision = await describeImage(buf); } catch {}
+                _lastPhoto.set(String(senderId), {
+                    vision, album: parsed.path, when: tail, relFile: r.relFile,
+                });
                 if (vision) {
                     log('[看图] ' + vision.slice(0, 60));
                     // 描述写进 sidecar，之后问"这张里有什么"能直接拿
@@ -975,6 +983,16 @@ async function _handleInner(userText, senderId, dest, imgs) {
         await replyTo(dest, '收到。', userText);
         return;
     }
+
+    // 「这张」「刚才那张」——指刚存的那张图，直接从缓存读，不走检索
+    try {
+        const _lp = _lastPhoto.get(String(senderId));
+        if (_lp && /这张|那张|刚才那|刚刚那|这张图|这张照片|照片里/.test(userText)) {
+            const line = `【她刚存的那张图】相册《${_lp.album}》，${_lp.when}${_lp.vision ? '，画面是：' + _lp.vision : ''}。`
+                + `\n用户说"这张/那张"时指的就是它，直接按这个答，不要说"没存到"。`;
+            _lastPhotoHint = line;
+        }
+    } catch {}
 
     if (tryMemoryWrite(userText)) {
         await replyTo(dest, '记住了  已入库并生成抽查问答。');
