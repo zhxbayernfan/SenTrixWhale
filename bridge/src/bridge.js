@@ -290,11 +290,26 @@ async function shwSearch(query) {
             }
             seen.add(a.file_name); return true;
         }).slice(0, 5).map(it => ({
+            id: it.asset.id,
             file: it.asset.file_name,
             time: it.asset.captured_at,
             type: it.asset.media_type,
         }));
         log(`[SHW] q="${query}"${tr ? ' 区间=' + tr.from + '~' + tr.to : ''} 原始${(j.items || []).length}条 去重/筛选后${items.length}条`);
+        // [FIX-12] 检索只给文件名和时间，她没法"聊照片"——命中的前 3 条补取画面描述。
+        // 描述在 /assets/{id}/memories 里（search 的 asset 结构不含 caption）。
+        await Promise.all(items.slice(0, 3).map(async (it) => {
+            if (!it.id) return;
+            try {
+                const mr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(it.id) + '/memories',
+                    { signal: AbortSignal.timeout(8000) });
+                if (!mr.ok) return;
+                const mj = await mr.json();
+                const obs = (mj.items || []).find((o) => o.caption && String(o.caption).trim());
+                if (obs) it.desc = String(obs.caption).trim();
+            } catch (e) { /* 单条失败不影响整轮 */ }
+        }));
+        if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
         const events = tr ? await eventsInRange(tr.from, tr.to) : [];
         return { count: items.length, items, events, scope };
     } catch (e) { log('[SHW] 检索失败: ' + e.message); return null; }
@@ -358,8 +373,11 @@ async function think(userText, who) {
         const times = hits.items.map(x => x && x.time).filter(Boolean).sort();
         const span = times.length ? `，照片时间 ${times[0]} 到 ${times[times.length - 1]}` : '';
         const lines = (hits.events || []).map(e => `- ${e.date} ${e.place}：${e.summary}`).join('\n');
+        // [FIX-12] 有描述才能"聊照片"：把画面内容一起给模型，它才说得出"那张有樱花和琵琶"
+        const descs = (hits.items || []).filter(x => x && x.desc)
+            .map(x => `- ${String(x.time || '').slice(0, 10)}：${x.desc}`).join('\n');
         const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
-        memBlock = `【记忆证据】${lines ? '这几天你自己记下的事：\n' + lines + '\n' : ''}命中 ${hits.count} 条照片${span}${album}。只用上面这些事实回答，可以说"我记得"，不许补充证据之外的人名、地点、情节。`;
+        memBlock = `【记忆证据】${descs ? '这些照片里是：\n' + descs + '\n' : ''}${lines ? '这几天你自己记下的事：\n' + lines + '\n' : ''}命中 ${hits.count} 条照片${span}${album}。只用上面这些事实回答，可以说"我记得"，不许补充证据之外的人名、地点、情节。`;
     } else {
         // [FIX-8] 检索为空时必须直说没存到, 不许拿"温馨瞬间"之类的空话糊弄
         // [FIX-11] 模型不知道今天几号, 会把"没检索到"解释成"还没到", 必须把日期和话术都钉死
