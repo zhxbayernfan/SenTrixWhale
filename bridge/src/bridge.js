@@ -789,9 +789,23 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 const tail = parsed.precision === 'day' ? day
                     : parsed.precision === 'month' ? `${day.slice(0, 7)}（只到月份）`
                         : `${day.slice(0, 4)} 年（只到年份）`;
-                await replyTo(dest,
-                    `收好了 🐳 收进《${parsed.path}》，记作 ${tail}。${r.dedup ? '（这张之前收过，没重复占地方）' : ''}`,
-                    said);
+                // [看图] 存完让模型看一眼，回一句"这张里是什么"——本地 2 秒/张
+                let vision = '';
+                try { vision = await describeImage(buf); } catch {}
+                if (vision) {
+                    log('[看图] ' + vision.slice(0, 60));
+                    // 描述写进 sidecar，之后问"这张里有什么"能直接拿
+                    try {
+                        const jf = path.join(ROOT, 'media', 'photos', r.relFile.replace(/\.jpg$/i, '.json'));
+                        if (fs.existsSync(jf)) {
+                            const meta = JSON.parse(fs.readFileSync(jf, 'utf8'));
+                            meta.vision = vision;
+                            fs.writeFileSync(jf, JSON.stringify(meta, null, 2));
+                        }
+                    } catch (e2) { log('[看图] 写 sidecar 失败: ' + e2.message); }
+                }
+                const head = `收好了 🐳 收进《${parsed.path}》，记作 ${tail}。${r.dedup ? '（这张之前收过，没重复占地方）' : ''}`;
+                await replyTo(dest, vision ? `${head}\n这张里是：${vision}` : head, said);
             } else {
                 await replyTo(dest, '存的时候出了岔子：' + String(r.error).slice(0, 60), said);
             }
