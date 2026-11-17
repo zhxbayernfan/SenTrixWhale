@@ -376,6 +376,7 @@ async function think(userText, who) {
     const _hh = String(new Date().getHours()).padStart(2, '0');
     const _mm = String(new Date().getMinutes()).padStart(2, '0');
     let sys = `现在是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日 ${_hh}:${_mm}。问到几点就按这个答，不知道就说不清楚，不许编。`
+        + '\n\n' + memBlock   // 记忆证据必须拼进来（重写 sys 时漏过，检索白做了）
         + '\n\n【说话方式】像老朋友聊天：短、自然、有事说事。不报数字、不甩文件名、不列清单、不说"检索到"。'
         + '\n\n【四类问题，分开对待】'
         + '\n1. 查记忆（"我上次在哪拍的""杭州的照片"）→ 有就说，没有就说"这个我没存到"。'
