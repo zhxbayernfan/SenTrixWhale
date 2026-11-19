@@ -40,7 +40,9 @@ function logChat(who, userText, reply, usage) {
 // 身份识别字典（借鉴家人鲸WHO_NOTE思路）
 const WHO_NOTE = {
     '1303425363': { name: 'zhx1', role: '哥哥' },
-    '1309459509': { name: 'zhx2', role: '弟弟' }
+    '1309459509': { name: 'zhx2', role: '弟弟' },
+    // 1119 加的体验者，不是家里人。角色标"朋友"，避免被当成兄弟之一。
+    '1799833873': { name: '小林', role: '朋友' }
 };
 
 function getWhoNote(qq) {
@@ -379,6 +381,7 @@ async function think(userText, who) {
     const _mm = String(new Date().getMinutes()).padStart(2, '0');
     // 角色卡是"她是谁、什么脾气"的唯一来源。之前 roleText() 定义了却从没被调用，
     // sys 里只剩禁令没有设定，结果语气干巴、身份答乱（1119 实测）。
+    const _whoName = getWhoNote(who).name || '一位家人';
     let sys = (roleText() || '') + '\n\n'
         + `现在是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日 ${_hh}:${_mm}。问到几点就按这个答，不知道就说不清楚，不许编。`
         + '\n\n' + memBlock   // 记忆证据必须拼进来（重写 sys 时漏过，检索白做了）
@@ -397,19 +400,33 @@ async function think(userText, who) {
         + '\n· 不许编造记忆：不说"我想起上次……""记得吗那天……"，除非证据里真有。编出来的"记得"比"不知道"糟一百倍。'
         + '\n· 不许攀亲：不叫"哥/弟/姐/叔"，只用 zhx1 / zhx2 或"你"。'
         + '\n· 不许编时间：日期时刻按上面给的答。'
-        + '\n\n【名字方向别搞反】"叫小鲸吧"是给你起名，不是给用户起名；"我叫zhx1"是用户报自己名字。'
-        + '\n名字只写一遍（zhx1 / zhx2 / 小鲸），别拆成 "z x1"。人称：自己用"我"，用户用"你"。'
+        + '\n\n【起名方向（最容易反）】'
+        + '\n· 用户说"叫你小鲸""我可以叫你小鲸吗""以后叫你小鲸" → 是给你起名，答"好，那我以后就叫小鲸"。'
+        + '\n  绝不能说"以后就叫你小鲸"——那成了你给他起名，方向反了（1119 实测连错两次）。'
+        + '\n· "我叫 zhx1"是用户报自己的名字，不是给你起名。'
+        + '\n· 名字只写一遍（zhx1 / zhx2 / 小鲸），别拆成 "z x1"。人称：自己用"我"，用户用"你"。'
+        + '\n· 名字没定之前，别反复追问"你想叫我啥"——问过一次就别再提。'
+        + '\n\n【自我介绍只在被问时】'
+        + '\n· 问"你是谁/你叫什么/怎么称呼你"→ 按角色卡那几种说法挑一个。'
+        + '\n· 只是打招呼（"你好""在吗"）→ 正常回一句，别自我介绍、别提名字。'
+        + '\n· 别替用户拍板（"那这称呼就定下来了"这种不要说）。'
         + '\n\n【不认识的名字】先问"这是谁呀"，别顺着用。'
         + '\n\n【语气】你是助手，不是损友。不说"让它滚蛋""自己打脸"这种话——宁可平淡，别冒犯人。'
         + '\n\n【听不懂就承认】黑话、代码、占位符（"星池 明皮信皮""反观"这种）→ 直接说"这个我没听懂"，'
         + '\n  别顺着编"确实看着顺眼""这词儿用得有水平"——装懂比不懂更糟。'
+        + '\n  用户抛一个说法问"这是不是 XX"（"这种叫做词云吧"），没把握就直说"这个我不太懂"，别附会。'
+        + '\n\n【被纠正时先接受】用户说"不对吧""不是那个意思"→ 先说"你说得对/我再看看"，再按证据讲，'
+        + '\n  不要原封不动重复刚才那句（1119 实测：用户问"那是夕阳吗，不是灯吗"，她只回"那是夕阳"）。'
         + '\n\n【别用口头禅】不要每轮结尾都追问"现在想聊点啥？"，自然收尾就好。'
         + '\n你是工程鲸，不是家里的任何一个人。'
-        // 必须告诉她"此刻在跟谁说话"：角色卡只说"按号码认人"，号码得有人告诉她。
-        // 少了这一句，问"我是谁"她会反问"你是哪一个"（1119 实测）。
-        + `\n现在是 ${(getWhoNote(who).name || '一位家人')}（QQ ${who}）在跟你说话。他问"我是谁"，直接答"你是${(getWhoNote(who).name || '')}"，别反问。`
-        + (who === '1309459509' ? '\n问"我哥是谁"→"你哥是 zhx1"。' : '')
-        + (who === '1303425363' ? '\n问"我弟是谁"→"你弟是 zhx2"。问他"我哥是谁"→"你自己就是大哥，上头没有哥"。' : '')
+        // 必须告诉她"此刻在跟谁说话"，并把兄弟关系写成她照着能答的短句。
+        + `\n\n【身份速查】现在是 ${_whoName}（${who}）在跟你说话。`
+        + '\n· zhx1 = 大哥（上头没有哥），zhx2 = 弟弟（没有弟）。'
+        + (who === '1303425363'
+            ? '\n· 他问"我是谁"→"你是 zhx1"；问"我弟是谁"→"你弟是 zhx2"；问"我哥是谁"→"你自己就是大哥，上头没有哥"。'
+            : who === '1309459509'
+                ? '\n· 他问"我是谁"→"你是 zhx2"；问"我哥是谁"→"你哥是 zhx1"；问"我弟是谁"→"你是弟弟，没有弟"。'
+                : `\n· 这位是 ${_whoName}，来体验的朋友，不是 zhx1 也不是 zhx2。别把家里的兄弟关系套到他身上；他问"我是谁"→"你是${_whoName}"。`)
     if (_lastPhotoHint) sys = sys + '\n\n' + _lastPhotoHint;
     sys = filterSurrogates(sys);
 
@@ -560,6 +577,27 @@ async function pushCaptionToSHW(assetId, caption) {
         log('[写回] 描述已进 SHW ' + obs.id + '（' + caption.length + ' 字）');
         return true;
     } catch (e) { log('[写回] 失败: ' + e.message); return false; }
+}
+
+// [身份直答] 只认号码，只答关系。匹配不到就返回 null，交回模型。
+function identityAsk(text, who) {
+    const t = String(text || '').replace(/\s/g, '');
+    const z1 = who === '1303425363', z2 = who === '1309459509';
+    const note = getWhoNote(who);
+    const name = note && note.name;
+    if (/^我是谁[？?]?$|^我是谁呀[？?]?$/.test(t) && name && name !== '新朋友') return `你是${name}。`;
+    if (!z1 && !z2) {
+        // 朋友/体验者问"我哥是谁"：她不知道，也不该套 zhx 的关系（1119 实测套成了 zhx1）。
+        if (/我(哥|哥哥|大哥|弟|弟弟|小弟)是谁/.test(t)) return '这个我不知道，我是帮你管照片的，家里的事你比我清楚。';
+        return null;
+    }
+    const me = z1 ? 'zhx1' : 'zhx2';
+    if (/^我是谁[？?]?$|^我是谁呀[？?]?$/.test(t)) return `你是${me}。`;
+    if (/我(哥|哥哥|大哥)是谁/.test(t)) return z1 ? '你自己就是大哥，上头没有哥。' : '你哥是 zhx1。';
+    if (/我(弟|弟弟|小弟)是谁/.test(t)) return z2 ? '你就是弟弟，没有弟。' : '你弟是 zhx2。';
+    if (/zhx1是谁|谁是zhx1/i.test(t)) return z1 ? '就是你，家里的大哥。' : '你哥是 zhx1，家里的大哥。';
+    if (/zhx2是谁|谁是zhx2/i.test(t)) return z2 ? '就是你，家里的弟弟。' : '你弟是 zhx2，家里的弟弟。';
+    return null;
 }
 
 async function countPhotos() {
@@ -969,6 +1007,18 @@ async function _handleInner(userText, senderId, dest, imgs) {
 
     // 用户给我起名字（"以后叫你小鲸"）——记下来，之后每轮都注入
     const _newName = catchName(userText, senderId);
+
+    // [身份直答] 身份关系是确定事实，交给 4B 它会答反：
+    // 1119 实测 zhx1 问"我哥是谁"答"你哥是 zhx1"，zhx2 问"我弟是谁"答"你弟是 zhx2"，
+    // 角色卡和 sys 里两条规则都写了，模型照样绕不过去。跟 geoAsk 同一条路子——能本地判的不烧模型。
+    try {
+        const id = identityAsk(userText, senderId);
+        if (id) {
+            chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: id });
+            await replyTo(dest, id, userText);
+            return;
+        }
+    } catch (e) { log('[身份] 失败: ' + e.message); }
 
     // [地理问答] 本地地理库能直接答的，就不烧模型（4B 调工具不靠谱，本地判更快更准）
     try {

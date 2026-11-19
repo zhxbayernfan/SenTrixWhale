@@ -283,7 +283,11 @@ function parsePlace(text, homeProvince = '广东', inPrompt = false) {
     // 地名候选只留中文，剥掉代词/虚词，2-8 字才认。
     // 「那咱们的画廊呢」剥完是空的——它本来就不是地名。
     const raw = directive ? t.replace(/[^\u4e00-\u9fa5]/g, '') : '';
-    const guess = raw.replace(/(这些|那些|这个|那个|咱们|我们|你们|他们|什么|怎么|哪里|这儿|那儿|这|那|的|了|呢|吗|吧)/g, '');
+    // 时间词必须先剥掉：1119 实测「25年4月30日 下午16.09」在追问模式下
+    // 被解析成 全球/未归类/下午，照片存进了叫「下午」的相册。
+    // 日期那段已被时间解析消费掉，剩下的「下午16.09」去掉非中文就是「下午」。
+    const guess = raw.replace(/(这些|那些|这个|那个|咱们|我们|你们|他们|什么|怎么|哪里|这儿|那儿|这|那|的|了|呢|吗|吧)/g, '')
+        .replace(/(上午|下午|中午|晚上|傍晚|凌晨|早上|夜里|白天|半夜|点钟|点|分|秒|时|刻|整)/g, '');
     const clean = guess.length >= 2 && guess.length <= 8 ? guess : '';
     if (clean) {
         return { branch: 'global', path: [BRANCH.GLOBAL, '未归类', clean].join('/'), place: { unclassified: clean }, guessed: true };
