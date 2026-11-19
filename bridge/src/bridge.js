@@ -377,7 +377,10 @@ async function think(userText, who) {
     const _who = getWhoNote(who);
     const _hh = String(new Date().getHours()).padStart(2, '0');
     const _mm = String(new Date().getMinutes()).padStart(2, '0');
-    let sys = `现在是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日 ${_hh}:${_mm}。问到几点就按这个答，不知道就说不清楚，不许编。`
+    // 角色卡是"她是谁、什么脾气"的唯一来源。之前 roleText() 定义了却从没被调用，
+    // sys 里只剩禁令没有设定，结果语气干巴、身份答乱（1119 实测）。
+    let sys = (roleText() || '') + '\n\n'
+        + `现在是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日 ${_hh}:${_mm}。问到几点就按这个答，不知道就说不清楚，不许编。`
         + '\n\n' + memBlock   // 记忆证据必须拼进来（重写 sys 时漏过，检索白做了）
         + '\n\n【说话方式】像老朋友聊天：短、自然、有事说事。不报数字、不甩文件名、不列清单、不说"检索到"。'
         + '\n\n【四类问题，分开对待】'
@@ -402,6 +405,9 @@ async function think(userText, who) {
         + '\n  别顺着编"确实看着顺眼""这词儿用得有水平"——装懂比不懂更糟。'
         + '\n\n【别用口头禅】不要每轮结尾都追问"现在想聊点啥？"，自然收尾就好。'
         + '\n你是工程鲸，不是家里的任何一个人。'
+        // 必须告诉她"此刻在跟谁说话"：角色卡只说"按号码认人"，号码得有人告诉她。
+        // 少了这一句，问"我是谁"她会反问"你是哪一个"（1119 实测）。
+        + `\n现在是 ${(getWhoNote(who).name || '一位家人')}（QQ ${who}）在跟你说话。他问"我是谁"，直接答"你是${(getWhoNote(who).name || '')}"，别反问。`
         + (who === '1309459509' ? '\n问"我哥是谁"→"你哥是 zhx1"。' : '')
         + (who === '1303425363' ? '\n问"我弟是谁"→"你弟是 zhx2"。问他"我哥是谁"→"你自己就是大哥，上头没有哥"。' : '')
     if (_lastPhotoHint) sys = sys + '\n\n' + _lastPhotoHint;
