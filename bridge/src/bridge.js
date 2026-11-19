@@ -512,10 +512,10 @@ async function describeImage(buf) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: cfg.ds.model, max_tokens: 120, temperature: 0.5,
+                model: cfg.ds.model, max_tokens: 420, temperature: 0.6,
                 chat_template_kwargs: { enable_thinking: false },
                 messages: [{ role: 'user', content: [
-                    { type: 'text', text: '这张照片里有什么？一句话说清楚，30 字以内，不要"这张照片"这种开头。' },
+                    { type: 'text', text: '用中文描述这张照片，200 到 300 字。写清楚：画面里有什么、谁在做什么、什么环境、什么气氛。像给家里人讲这张照片那样自然，一段话说完，不要罗列，不要用"这张照片"开头，不要猜时间、地点和姓名。' },
                     { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + b64 } },
                 ]}],
             }),
@@ -524,6 +524,36 @@ async function describeImage(buf) {
         const j = await r.json();
         return String(j.choices?.[0]?.message?.content || '').trim();
     } catch (e) { log('[VLM] 看图失败: ' + e.message); return ''; }
+}
+
+// [写回] 识图结果写进 SHW 的 observation。
+// 分工：bridge 出"聊天用的描述"（热记忆，立刻能用），SHW 只管存和索引，
+// 入库时不再重复观察（/media/import 本来就是 observe=False）。
+// 走 PATCH /memories 而不是直接写库：它会删旧文本向量、重建索引，也会记 revision。
+async function pushCaptionToSHW(assetId, caption) {
+    if (!assetId || !caption) return false;
+    const base = String((cfg.shw && cfg.shw.apiBase) || 'http://127.0.0.1:8191').replace(/\/$/, '');
+    try {
+        const r1 = await fetch(`${base}/api/v1/assets/${encodeURIComponent(assetId)}/memories`,
+            { signal: AbortSignal.timeout(10000) });
+        if (!r1.ok) { log('[写回] 取观察失败 HTTP ' + r1.status); return false; }
+        const j1 = await r1.json();
+        const obs = (j1.items || [])[0];
+        if (!obs || !obs.id) { log('[写回] 这张还没有 observation，跳过'); return false; }
+        const r2 = await fetch(`${base}/api/v1/memories/observation/${encodeURIComponent(obs.id)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ changes: { caption }, revision: obs.revision, reason: 'bridge 识图回填' }),
+            signal: AbortSignal.timeout(60000),
+        });
+        if (!r2.ok) {
+            const t = await r2.text();
+            log('[写回] PATCH ' + r2.status + ': ' + t.slice(0, 120));
+            return false;
+        }
+        log('[写回] 描述已进 SHW ' + obs.id + '（' + caption.length + ' 字）');
+        return true;
+    } catch (e) { log('[写回] 失败: ' + e.message); return false; }
 }
 
 async function countPhotos() {
@@ -758,7 +788,7 @@ async function _handleInner(userText, senderId, dest, imgs) {
         }
     }
     // 入库并回话（带字直存 / 追问后存 共用）
-    async function doIngest(buf, parsed, dest, said) {
+    async function doIngest(buf, parsed, dest, said, preVision) {
         try {
             const r = await ingestPhoto(buf, {
                 album: parsed.path,
@@ -777,7 +807,7 @@ async function _handleInner(userText, senderId, dest, imgs) {
                         : `${day.slice(0, 4)} 年（只到年份）`;
                 // [看图] 存完让模型看一眼，回一句"这张里是什么"——本地 2 秒/张
                 let vision = '';
-                try { vision = await describeImage(buf); } catch {}
+                try { vision = await (preVision || describeImage(buf)); } catch {}
                 _lastPhoto.set(String(senderId), {
                     vision, album: parsed.path, when: tail, relFile: r.relFile,
                 });
@@ -795,6 +825,8 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 }
                 const head = `收好了 🐳 收进《${parsed.path}》，记作 ${tail}。${r.dedup ? '（这张之前收过，没重复占地方）' : ''}`;
                 await replyTo(dest, vision ? `${head}\n这张里是：${vision}` : head, said);
+                // 回复先发出去，写回 SHW 在后台跑，不挡用户下一句
+                if (vision && r.assetId) pushCaptionToSHW(r.assetId, vision).catch(() => {});
             } else if (r.undated) {
                 // 解析不出时间就不入库。以前 ingestPhoto 会用 new Date() 兜底，
                 // 把"补传的图"记成当天拍摄，还写进 EXIF 覆盖掉原始时间（见巴伐利亚那条）。
@@ -818,6 +850,9 @@ async function _handleInner(userText, senderId, dest, imgs) {
             try {
                 const buf = await fetchImageBytes(seg);
                 if (!buf) throw new Error('取不到图片字节');
+                // [识图前置] 图一到手就开始识图，和后面的追问/入库并行跑。
+                // 用户答完"什么时候、在哪儿"，描述通常已经好了，不用再等一轮模型。
+                const visionP = describeImage(buf).catch(() => '');
 
                 // [EXIF 自动] 如果这张图还带着 EXIF（QQ「原图」可能保留），就不用问用户：
                 // 时间来自 DateTimeOriginal，城市来自 GPS 反查。
@@ -853,7 +888,7 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 } catch (e) { log('[EXIF] 解析失败: ' + e.message); }
 
                 if (autoParsed) {
-                    await doIngest(buf, autoParsed, dest, '来自照片自带的信息');
+                    await doIngest(buf, autoParsed, dest, '来自照片自带的信息', visionP);
                     return;
                 }
 
@@ -862,11 +897,11 @@ async function _handleInner(userText, senderId, dest, imgs) {
                     homeProvince: (cfg.album && cfg.album.homeProvince) || '广东',
                 });
                 if (userText && userText.trim() && parsedNow.ok) {
-                    await doIngest(buf, parsedNow, dest, userText);
+                    await doIngest(buf, parsedNow, dest, userText, visionP);
                     return;
                 }
 
-                pendingPhoto = { buf, senderId, dest, round: 0, maxRounds: 3, said: (userText || '').trim(), exifWhen };
+                pendingPhoto = { buf, senderId, dest, round: 0, maxRounds: 3, said: (userText || '').trim(), exifWhen, vision: visionP };
                 if (userText && userText.trim() && parsedNow.missing.length === 1) {
                     // 说了一半（只缺一样），点上缺的那一样就行，别让他重说
                     await replyTo(dest,
@@ -905,7 +940,7 @@ async function _handleInner(userText, senderId, dest, imgs) {
         pendingPhoto.said = combined;
 
         if (parsed.ok) {
-            await doIngest(pendingPhoto.buf, parsed, dest, userText);
+            await doIngest(pendingPhoto.buf, parsed, dest, userText, pendingPhoto.vision);
             pendingPhoto = null;
             return;
         }
