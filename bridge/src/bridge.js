@@ -563,7 +563,7 @@ async function think(userText, who) {
     const _fetchBody = JSON.stringify({ 
         model: cfg.ds.model, 
         max_tokens: 2048,
-        temperature: 0.7,
+        temperature: 0.3,
         repetition_penalty: 1.15,   // 默认 1.0 = 不惩罚，模型会字面复述上文
         top_p: 0.9,
         thinking: { type: 'disabled' },
@@ -758,7 +758,8 @@ function identityAsk(text, who) {
         const word = m[1];
         const hitSelf = (x) => x.role === word || (x.aliases || []).includes(word);
         if (!me) return '这个我不知道，我是帮你管照片的，家里的事你比我清楚。';
-        if (hitSelf(me)) {
+        // 他和这个词同属一大类也算"在说自己"（堂妹说"表姐"），要纠正称呼
+        if (hitSelf(me) || classOf(me.role) === classOf(word)) {
             const up = UP_ROLES.includes(me.role) || /哥|姐|爸|妈/.test(me.role);
             return `你说笑了，你已经是家里的${me.role}了，没有更往${up ? '上' : '下'}的${me.role}了。`;
         }
