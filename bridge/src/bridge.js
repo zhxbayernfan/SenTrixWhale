@@ -296,7 +296,15 @@ async function shwSearch(query) {
                 if (!mr.ok) return;
                 const mj = await mr.json();
                 const obs = (mj.items || []).find((o) => o.caption && String(o.caption).trim());
-                if (obs) it.desc = String(obs.caption).trim();
+                if (obs) {
+                    it.desc = String(obs.caption).trim();
+                    // 描述是句子，模型容易只读前半句（1119「那是夕阳吗」它答"没提是灯"，
+                    // 可 caption 原文就写着"被灯光照亮"）。词表能防漏读，一起给它。
+                    try {
+                        const objs = JSON.parse(obs.objects_json || '[]');
+                        if (Array.isArray(objs) && objs.length) it.objects = objs.slice(0, 12).join('、');
+                    } catch (e) { /* 没有词表就算了 */ }
+                }
             } catch (e) { /* 单条失败不影响整轮 */ }
         }));
         if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
@@ -361,7 +369,7 @@ async function think(userText, who) {
         const lines = (hits.events || []).map(e => `- ${e.date} ${e.place}：${e.summary}`).join('\n');
         // [FIX-12] 有描述才能"聊照片"：把画面内容一起给模型，它才说得出"那张有樱花和琵琶"
         const descs = (hits.items || []).filter(x => x && x.desc)
-            .map(x => `- ${String(x.time || '').slice(0, 10)}：${x.desc}`).join('\n');
+            .map(x => `- ${String(x.time || '').slice(0, 10)}：${x.desc}${x.objects ? '（画面元素：' + x.objects + '）' : ''}`).join('\n');
         const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
         memBlock = `【记忆证据】${descs ? '这些照片里是：\n' + descs + '\n' : ''}${lines ? '这几天你自己记下的事：\n' + lines + '\n' : ''}命中 ${hits.count} 条照片${span}${album}。只用上面这些事实回答，可以说"我记得"，不许补充证据之外的人名、地点、情节。`;
     } else {
@@ -417,6 +425,10 @@ async function think(userText, who) {
         + '\n  用户抛一个说法问"这是不是 XX"（"这种叫做词云吧"），没把握就直说"这个我不太懂"，别附会。'
         + '\n\n【被纠正时先接受】用户说"不对吧""不是那个意思"→ 先说"你说得对/我再看看"，再按证据讲，'
         + '\n  不要原封不动重复刚才那句（1119 实测：用户问"那是夕阳吗，不是灯吗"，她只回"那是夕阳"）。'
+        + '\n\n【答之前把证据读完】'
+        + '\n· 【记忆证据】里每条描述都要看完再答，不要只挑开头半句。'
+        + '\n· 用户质疑某个细节（"那是夕阳吗？不是灯吗"）→ 先在证据里找原句；证据里两种都提到了就都说，别只咬一个。'
+        + '\n· 证据里确实没写的，才说"这个我没看到"。'
         + '\n\n【别用口头禅】不要每轮结尾都追问"现在想聊点啥？"，自然收尾就好。'
         + '\n你是工程鲸，不是家里的任何一个人。'
         // 必须告诉她"此刻在跟谁说话"，并把兄弟关系写成她照着能答的短句。
