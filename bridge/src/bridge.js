@@ -244,6 +244,7 @@ async function shwSearch(query) {
     if (!cfg.shw || !cfg.shw.enabled) return null;  // 未启用: 走本地记忆
     try {
         const tr = timeRangeOf(query);
+        let altItems = [];   // 时间窗外的候选，声明必须在任何引用之前
         // [地图检索] 问题里带地名就按相册过滤：问"杭州"→ scope=全国/浙江/杭州。
         // SHW 的 scope 是精确匹配（不支持前缀），所以只在解析出完整路径时才带。
         let scope = '';
@@ -254,8 +255,8 @@ async function shwSearch(query) {
 
         // [FIX-9] SHW 的 time_range 过滤在本机会抛 "naive/aware datetime" 错, metadata 通道降级,
         // 于是它仍会把 2023 年的照片当"上周"返回. 这里不信任服务端过滤, 取回后本地按日期硬筛.
-        const buildUrl = (sc) => cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(query) + '&top_k=10'
-            + (tr ? '&time_range=' + encodeURIComponent(tr.label) : '')
+        const buildUrl = (sc, withTime = true) => cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(query) + '&top_k=10'
+            + (tr && withTime ? '&time_range=' + encodeURIComponent(tr.label) : '')
             + (sc ? '&scope_id=' + encodeURIComponent(sc) : '');
 
         let r = await fetch(buildUrl(scope), { signal: AbortSignal.timeout(20000) });
@@ -268,13 +269,28 @@ async function shwSearch(query) {
             if (!r.ok) { log('[SHW] HTTP ' + r.status); return null; }
             _j = await r.json();
         }
+        // 时间窗一条都没有 → 用户很可能记错了年份/月份。去掉时间窗重搜，
+        // 命中了再让她说"你说的是XXXX那张吗"（1119 实测说错年份她直接答"没存"）。
+        let timeMiss = false;
+        if (tr && (!_j.items || !_j.items.length)) {
+            log('[SHW] 时间窗=' + tr.label + ' 无结果，去掉时间窗重搜');
+            // 用全库 + 无时间窗：scope 可能本身就是错的（"德国慕尼黑" vs 库里的"巴伐利亚"），
+            // 再拿它去搜一次还是空。
+            r = await fetch(buildUrl('', false), { signal: AbortSignal.timeout(20000) });
+            if (r.ok) {
+                const j2 = await r.json();
+                if (j2.items && j2.items.length) { _j = j2; timeMiss = true; }
+            }
+        }
         if (scope) log('[SHW] 按相册过滤: ' + scope);
         const j = _j;   // body 已经消费过，不能再 json() 一次
         const seen = new Set();
         const items = (j.items || []).filter(it => {   // [FIX-6] 同一张图会返回多条, 按文件名去重
             const a = it.asset || {};
             if (!a.file_name || seen.has(a.file_name)) return false;
-            if (tr) {                                  // [FIX-9] 只留落在时间区间内的
+            // [FIX-9] 只留落在时间区间内的；但 timeMiss 说明用户报错了时间、
+            // 这批是去掉时间窗才搜到的，再按原时间窗过滤会把它们全剔掉。
+            if (tr && !timeMiss) {
                 const day = String(a.captured_at || '').slice(0, 10);
                 if (!day || day < tr.from || day > tr.to) return false;
             }
@@ -311,8 +327,39 @@ async function shwSearch(query) {
             } catch (e) { /* 单条失败不影响整轮 */ }
         }));
         if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
-        const events = tr ? await eventsInRange(tr.from, tr.to) : [];
-        return { count: items.length, items, events, scope };
+        // 带时间窗时再跑一次纯语义检索：用户可能记错时间，而时间窗里恰好有别的照片，
+        // 只按时间信就会答"没存"（1119 实测：问"2025年12月词云海报"，时间窗里只有猫）。
+        if (tr && !timeMiss) {
+            try {
+                const ra = await fetch(buildUrl('', false), { signal: AbortSignal.timeout(20000) });
+                if (ra.ok) {
+                    const ja = await ra.json();
+                    const seenFile = new Set(items.map((x) => x.file).filter(Boolean));
+                    altItems = (ja.items || []).filter((it) => {
+                        const a = it.asset || {};
+                        if (!a.file_name || seenFile.has(a.file_name)) return false;
+                        seenFile.add(a.file_name); return true;
+                    }).slice(0, 3).map((it) => ({
+                        id: it.asset.id, file: it.asset.file_name, time: it.asset.captured_at,
+                    }));
+                }
+            } catch (e) { /* 补充检索失败不影响主结果 */ }
+        }
+        const events = tr && !timeMiss ? await eventsInRange(tr.from, tr.to) : [];
+        if (altItems.length) {
+            await Promise.all(altItems.map(async (it) => {
+                try {
+                    const mr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(it.id) + '/memories',
+                        { signal: AbortSignal.timeout(8000) });
+                    if (!mr.ok) return;
+                    const mj = await mr.json();
+                    const obs = (mj.items || []).find((o) => o.caption && String(o.caption).trim());
+                    if (obs) it.desc = String(obs.caption).trim();
+                } catch (e) { /* 单条失败不影响 */ }
+            }));
+            log('[SHW] 另补 ' + altItems.length + ' 条（时间窗外的候选）');
+        }
+        return { count: items.length, items, events, scope, timeMiss, askedTime: tr ? tr.label : '', altItems };
     } catch (e) { log('[SHW] 检索失败: ' + e.message); return null; }
 }
 
@@ -374,7 +421,15 @@ async function think(userText, who) {
         const descs = (hits.items || []).filter(x => x && x.desc)
             .map(x => `- ${String(x.time || '').slice(0, 10)}${x.place ? '（' + x.place + '）' : ''}：${x.desc}${x.objects ? '（画面元素：' + x.objects + '）' : ''}`).join('\n');
         const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
-        memBlock = `【记忆证据】${descs ? '这些照片里是：\n' + descs + '\n' : ''}${lines ? '这几天你自己记下的事：\n' + lines + '\n' : ''}命中 ${hits.count} 条照片${span}${album}。只用上面这些事实回答，可以说"我记得"，不许补充证据之外的人名、地点、情节。`;
+        const _altLines = (hits.altItems || []).filter((x) => x.desc)
+            .map((x) => `- ${String(x.time || '').slice(0, 10)}：${x.desc}`).join('\n');
+        const _altBlock = _altLines
+            ? `\n【时间对不上但内容可能对】用户说的是「${hits.askedTime}」，下面这些不在那个时间，但可能是他要找的：\n${_altLines}\n如果对得上，先确认"你说的是${String((hits.altItems[0] || {}).time || '').slice(0, 7)}那张吗"，再答。\n`
+            : '';
+        const _timeWarn = (hits.timeMiss && hits.askedTime)
+            ? `\n【时间对不上】用户说的是「${hits.askedTime}」，但库里没有那个时间的照片；上面这些是时间最接近的。说话时先确认一句"你说的是XXXX那张吗"，把正确的时间讲出来，再答内容。\n`
+            : '';
+        memBlock = `【记忆证据】${_altBlock}${_timeWarn}${descs ? '这些照片里是：\n' + descs + '\n' : ''}${lines ? '这几天你自己记下的事：\n' + lines + '\n' : ''}命中 ${hits.count} 条照片${span}${album}。只用上面这些事实回答，可以说"我记得"，不许补充证据之外的人名、地点、情节。`;
     } else {
         // [FIX-8] 检索为空时必须直说没存到, 不许拿"温馨瞬间"之类的空话糊弄
         // [FIX-11] 模型不知道今天几号, 会把"没检索到"解释成"还没到", 必须把日期和话术都钉死
