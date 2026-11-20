@@ -715,6 +715,14 @@ const relOf = (word) => (REL_WORDS.find(([, ws]) => ws.includes(word)) || [null]
 const familyMembers = () => ((cfg.family && cfg.family.members) || []).map((m) => ({ ...m, qq: String(m.qq) }));
 const memberByQq = (qq) => familyMembers().find((m) => m.qq === String(qq)) || null;
 const UP_ROLES = ['哥哥', '姐姐', '爸爸', '妈妈', '老公', '老婆'];
+// 关系大类：同类里说错了称呼（说"表妹"其实是"堂妹"）要纠正，别顺着他叫
+const REL_CLASS = [
+    ['兄弟', ['哥', '哥哥', '大哥', '堂哥', '表哥', '弟', '弟弟', '堂弟', '表弟']],
+    ['姐妹', ['姐', '姐姐', '堂姐', '表姐', '妹', '妹妹', '堂妹', '表妹']],
+    ['长辈', ['爸', '爸爸', '妈', '妈妈']],
+    ['配偶', ['老公', '老婆', '丈夫', '妻子']],
+];
+const classOf = (word) => (REL_CLASS.find(([, ws]) => ws.includes(word)) || [null])[0];
 
 // [身份误用提示] 复合题用：用户说"我哥拍的""我弟那张"，但他自己就是哥/弟。
 // identityAsk 只认完整问句（"我哥是谁"），这类走模型时模型不会纠正，得先提示一句。
@@ -756,6 +764,12 @@ function identityAsk(text, who) {
         }
         const target = members.find((x) => x.qq !== me.qq && hitSelf(x));
         if (target) return `你的${target.role}是${target.name}，QQ号${target.qq}那位。`;
+        // 同类但叫错了（"我表妹"→家里只有堂妹）：纠正，别顺着说
+        const cls = classOf(word);
+        if (cls) {
+            const near = members.find((x) => x.qq !== me.qq && classOf(x.role) === cls);
+            if (near) return `你说的应该是${near.role}吧？${near.name}是你${near.role}，不是${word}。`;
+        }
         return null;
     }
 
