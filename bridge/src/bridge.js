@@ -916,6 +916,31 @@ let lastCall = 0;
 const _lastNum = new Map();   // 每个用户上一条是不是数字消息
 // 每个人最近存的那张图（含看图描述）——用户追问「这张」「刚才那张」时要用
 const _lastPhoto = new Map();
+// [随聊注入] 用户聊照片时顺口说的照片外的事（"那天去看了一场比赛"），记到这张照片上。
+// 存在 bridge 侧，不进 SHW——照片外的信息（当时发生了什么）SHW 的观察字段装不下。
+// 远景：重复信息怎么去重、要不要写回 SHW，后续再说；这里先做"记得住、下次聊得到"。
+const NOTES = path.join(ROOT, 'state', 'photo_notes.json');
+let photoNotes = {};
+try { photoNotes = JSON.parse(fs.readFileSync(NOTES, 'utf8')); } catch (e) { photoNotes = {}; }
+function saveNotes() { try { fs.writeFileSync(NOTES, JSON.stringify(photoNotes, null, 2)); } catch (e) { log('[备注] 写盘失败: ' + e.message); } }
+function addNote(assetId, text) {
+    if (!assetId || !text) return false;
+    const t = String(text).trim();
+    if (t.length < 6 || t.length > 120) return false;
+    const arr = photoNotes[assetId] || (photoNotes[assetId] = []);
+    if (arr.includes(t)) return false;
+    arr.push(t);
+    if (arr.length > 8) arr.shift();
+    saveNotes();
+    return true;
+}
+// 只在"像陈述"的时候记：问句不要，"那天/当时/因为/去看"这类才像在补故事
+function noteWorthy(text) {
+    const t = String(text || '').trim();
+    if (!t || t.length < 6 || t.length > 120) return false;
+    if (/[?？]|吗$|呢$|什么|哪|几|多少|为什么|怎么|是不是/.test(t)) return false;
+    return /那天|当时|其实|因为|去看|是在|后来|那次|一起|记得|就是/.test(t);
+}
 let _lastPhotoHint = '';   // handle 里查出来，think 里注入（跨函数）
 let _handleChain = Promise.resolve();
 let _queued = 0;
@@ -967,7 +992,7 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 let vision = '';
                 try { vision = await (preVision || describeImage(buf)); } catch {}
                 _lastPhoto.set(String(senderId), {
-                    vision, album: parsed.path, when: tail, relFile: r.relFile,
+                    vision, album: parsed.path, when: tail, relFile: r.relFile, assetId: r.assetId,
                 });
                 if (vision) {
                     log('[看图] ' + vision.slice(0, 60));
@@ -1177,9 +1202,21 @@ async function _handleInner(userText, senderId, dest, imgs) {
     // 「这张」「刚才那张」——指刚存的那张图，直接从缓存读，不走检索
     try {
         const _lp = _lastPhoto.get(String(senderId));
+        // [随聊注入] 刚聊过那张照片、这句又像在补故事 → 记到照片上，并当场接住。
+        // 不接住的话模型会把这句判成"无关话题"，回一句"这个我帮不上"（1120 实测）。
+        if (_lp && _lp.assetId && noteWorthy(userText)) {
+            if (addNote(_lp.assetId, userText)) {
+                log('[备注] 记到照片 ' + _lp.assetId + ': ' + userText.slice(0, 40));
+                chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: '记下了，这事记在那张照片上' });
+                await replyTo(dest, '记下了 🐳 这事我记在那张照片上了，下回聊到能想起来。', userText);
+                return;
+            }
+        }
         if (_lp && /这张|那张|刚才那|刚刚那|这张图|这张照片|照片里/.test(userText)) {
+            const notes = (_lp.assetId && photoNotes[_lp.assetId] || []).slice(-4);
+            const noteLine = notes.length ? `\n他聊这张时说过：${notes.join('；')}。这些是他讲的，可以拿来聊，别当成画面内容。` : '';
             const line = `【她刚存的那张图】相册《${_lp.album}》，${_lp.when}${_lp.vision ? '，画面是：' + _lp.vision : ''}。`
-                + `\n用户说"这张/那张"时指的就是它，直接按这个答，不要说"没存到"。`;
+                + `\n用户说"这张/那张"时指的就是它，直接按这个答，不要说"没存到"。` + noteLine;
             _lastPhotoHint = line;
         }
     } catch {}
