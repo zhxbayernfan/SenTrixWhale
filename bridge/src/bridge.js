@@ -322,6 +322,9 @@ async function shwSearch(query) {
                         // 地点也要给：111120 实测问"安联竞技场在哪个城市"她答"照片里没写"，
                         // 其实 observation.place 里就写着"德国慕尼黑"。
                         if (obs.place && String(obs.place).trim()) it.place = String(obs.place).trim();
+                        // 地理真相在相册路径里：深圳那张的 place 写的是"建筑物外部有顶走廊"（VLM 从画面推的），
+                        // 而 scope_id 是"广东/深圳/福田"。两个都给她，问"在哪拍的"才答得出城市。
+                        if (obs.scope_id) it.scope = String(obs.scope_id);
                     } catch (e) { /* 没有词表就算了 */ }
                 }
             } catch (e) { /* 单条失败不影响整轮 */ }
@@ -423,7 +426,7 @@ async function think(userText, who) {
         const lines = (hits.events || []).map(e => `- ${e.date} ${e.place}：${e.summary}`).join('\n');
         // [FIX-12] 有描述才能"聊照片"：把画面内容一起给模型，它才说得出"那张有樱花和琵琶"
         const descs = (hits.items || []).filter(x => x && x.desc)
-            .map(x => `- ${String(x.time || '').slice(0, 10)}${x.place ? '（' + x.place + '）' : ''}：${x.desc}${x.objects ? '（画面元素：' + x.objects + '）' : ''}`).join('\n');
+            .map(x => `- ${String(x.time || '').slice(0, 10)}\n  相册（地理位置）：${x.scope || '（没记）'}\n  画面里的地点：${x.place || '（没记）'}\n  画面：${x.desc}${x.objects ? '\n  元素：' + x.objects : ''}`).join('\n');
         const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
         // 用户说"这几张/这三张/哪张是"时，指代的是刚才聊过的那几张，不是这次检索到的
         const _refWords = /这几张|这三张|那几张|哪张|哪一个|最早|最晚|最近|比较/;
@@ -532,8 +535,11 @@ async function think(userText, who) {
     // 必须累积不能覆盖：连着聊德国、广州、深圳，覆盖只剩最后一张，
     // 用户问"这三张"就指不全（1120 实测）。
     try {
-        const _hitTop = (hits && hits.items || []).filter((x) => x && x.id).slice(0, 3)
-            .map((x) => ({ id: x.id, time: x.time, desc: x.desc || '' }));
+        // 只记这一轮"真正说到"的那一张（检索第一条）。记 top3 会把同一次检索里
+        // 顺带命中的别的照片也记进来，几轮之后指代就乱了（1120 实测）。
+        const _isRefQ = /这几张|这三张|那几张|哪张是|哪一个是|最早|最晚/.test(userText);
+        const _hitTop = (!_isRefQ && hits && hits.items || []).filter((x) => x && x.id).slice(0, 1)
+            .map((x) => ({ id: x.id, time: x.time, desc: x.desc || '', place: x.place || '' }));
         if (_hitTop.length) {
             const prev = _recentPhotos.get(String(who)) || [];
             const merged = [..._hitTop, ...prev.filter((p) => !_hitTop.some((h) => h.id === p.id))].slice(0, 5);
