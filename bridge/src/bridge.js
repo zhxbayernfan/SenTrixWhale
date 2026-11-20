@@ -529,6 +529,8 @@ async function think(userText, who) {
               + `他没有那个关系（比如哥哥问"我哥"）→"你说笑了，你已经是家里的${_meRole}了"。`
             : '\n· 这位不是家里人，是朋友。别把家里的关系套到他身上。')
     if (_lastPhotoHint) sys = sys + '\n\n' + _lastPhotoHint;
+    const _idHint = identityHint(userText, who);
+    if (_idHint) sys = sys + _idHint;
     sys = filterSurrogates(sys);
 
     // 这一轮聊到的照片，累积进去给下一轮做指代用。
@@ -713,6 +715,19 @@ const relOf = (word) => (REL_WORDS.find(([, ws]) => ws.includes(word)) || [null]
 const familyMembers = () => ((cfg.family && cfg.family.members) || []).map((m) => ({ ...m, qq: String(m.qq) }));
 const memberByQq = (qq) => familyMembers().find((m) => m.qq === String(qq)) || null;
 const UP_ROLES = ['哥哥', '姐姐', '爸爸', '妈妈', '老公', '老婆'];
+
+// [身份误用提示] 复合题用：用户说"我哥拍的""我弟那张"，但他自己就是哥/弟。
+// identityAsk 只认完整问句（"我哥是谁"），这类走模型时模型不会纠正，得先提示一句。
+function identityHint(text, who) {
+    const me = memberByQq(who);
+    if (!me) return '';
+    const m = String(text || '').match(/我(哥|哥哥|大哥|弟|弟弟|小弟|姐|姐姐|妹|妹妹|老公|老婆|爸|爸爸|妈|妈妈)(?=拍|的|说|那|和)/);
+    if (!m) return '';
+    const role = relOf(m[1]);
+    if (!role || me.role !== role) return '';
+    return `\n\n【先纠一句】用户说"我${m[1]}"，但他自己就是家里的${me.role}，没有${role}。`
+        + `先纠正（比如"你说笑了，你自己就是${me.role}，没有${role}"），再答后面的问题，两件事都要说。`;
+}
 
 function identityAsk(text, who) {
     const t = String(text || '').replace(/\s/g, '');
