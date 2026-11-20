@@ -390,6 +390,10 @@ async function think(userText, who) {
     // 角色卡是"她是谁、什么脾气"的唯一来源。之前 roleText() 定义了却从没被调用，
     // sys 里只剩禁令没有设定，结果语气干巴、身份答乱（1119 实测）。
     const _whoName = getWhoNote(who).name || '一位家人';
+    const _fam = familyMembers();
+    const _me = _fam.find((m) => m.qq === String(who)) || null;
+    const _meRole = _me ? _me.role : '';
+    const _famLine = _fam.map((m) => `${m.name}（QQ ${m.qq}）= ${m.role}`).join('、');
     let sys = (roleText() || '') + '\n\n'
         + `现在是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日 ${_hh}:${_mm}。问到几点就按这个答，不知道就说不清楚，不许编。`
         + '\n\n' + memBlock   // 记忆证据必须拼进来（重写 sys 时漏过，检索白做了）
@@ -433,12 +437,11 @@ async function think(userText, who) {
         + '\n你是工程鲸，不是家里的任何一个人。'
         // 必须告诉她"此刻在跟谁说话"，并把兄弟关系写成她照着能答的短句。
         + `\n\n【身份速查】现在是 ${_whoName}（${who}）在跟你说话。`
-        + '\n· zhx1 = 大哥（上头没有哥），zhx2 = 弟弟（没有弟）。'
-        + (who === '1303425363'
-            ? '\n· 他问"我是谁"→"你是 zhx1"；问"我弟是谁"→"你弟是 zhx2"；问"我哥是谁"→"你自己就是大哥，上头没有哥"。'
-            : who === '1309459509'
-                ? '\n· 他问"我是谁"→"你是 zhx2"；问"我哥是谁"→"你哥是 zhx1"；问"我弟是谁"→"你是弟弟，没有弟"。'
-                : `\n· 这位是 ${_whoName}，来体验的朋友，不是 zhx1 也不是 zhx2。别把家里的兄弟关系套到他身上；他问"我是谁"→"你是${_whoName}"。`)
+        + (_famLine ? `\n· 家里的人：${_famLine}。` : '')
+        + (_meRole
+            ? `\n· 他自己是家里的${_meRole}。问"我是谁"→"你是${_whoName}，家里的${_meRole}"；问"我X是谁"按上面的关系答；`
+              + `他没有那个关系（比如哥哥问"我哥"）→"你说笑了，你已经是家里的${_meRole}了"。`
+            : '\n· 这位不是家里人，是朋友。别把家里的关系套到他身上。')
     if (_lastPhotoHint) sys = sys + '\n\n' + _lastPhotoHint;
     sys = filterSurrogates(sys);
 
@@ -591,24 +594,57 @@ async function pushCaptionToSHW(assetId, caption) {
     } catch (e) { log('[写回] 失败: ' + e.message); return false; }
 }
 
-// [身份直答] 只认号码，只答关系。匹配不到就返回 null，交回模型。
+// [身份直答] 家庭关系从 config.family 读，不写死兄弟——换个家庭改一行配置就行。
+const REL_WORDS = [
+    ['哥哥', ['哥哥', '大哥', '兄长', '哥']],
+    ['弟弟', ['弟弟', '老弟', '小弟', '弟']],
+    ['姐姐', ['姐姐', '大姐', '姐']],
+    ['妹妹', ['妹妹', '小妹', '妹']],
+    ['爸爸', ['爸爸', '父亲', '老爸', '爸']],
+    ['妈妈', ['妈妈', '母亲', '老妈', '妈']],
+    ['老公', ['老公', '丈夫', '先生']],
+    ['老婆', ['老婆', '妻子', '爱人']],
+    ['儿子', ['儿子']],
+    ['女儿', ['女儿']],
+];
+const relOf = (word) => (REL_WORDS.find(([, ws]) => ws.includes(word)) || [null])[0];
+const familyMembers = () => ((cfg.family && cfg.family.members) || []).map((m) => ({ ...m, qq: String(m.qq) }));
+const memberByQq = (qq) => familyMembers().find((m) => m.qq === String(qq)) || null;
+const UP_ROLES = ['哥哥', '姐姐', '爸爸', '妈妈', '老公', '老婆'];
+
 function identityAsk(text, who) {
     const t = String(text || '').replace(/\s/g, '');
-    const z1 = who === '1303425363', z2 = who === '1309459509';
-    const note = getWhoNote(who);
-    const name = note && note.name;
-    if (/^我是谁[？?]?$|^我是谁呀[？?]?$/.test(t) && name && name !== '新朋友') return `你是${name}。`;
-    if (!z1 && !z2) {
-        // 朋友/体验者问"我哥是谁"：她不知道，也不该套 zhx 的关系（1119 实测套成了 zhx1）。
-        if (/我(哥|哥哥|大哥|弟|弟弟|小弟)是谁/.test(t)) return '这个我不知道，我是帮你管照片的，家里的事你比我清楚。';
+    const me = memberByQq(who);
+    const members = familyMembers();
+
+    // 「我是谁」
+    if (/^我是谁[？?]?$|^我是谁呀[？?]?$/.test(t)) {
+        if (me) return `你是${me.name}，家里的${me.role}。`;
+        const note = getWhoNote(who);
+        return note && note.name && note.name !== '新朋友' ? `你是${note.name}。` : null;
+    }
+
+    // 「我X是谁」
+    const m = t.match(/我(.{1,3}?)(?:是谁|是哪位|是哪个)/);
+    if (m) {
+        const role = relOf(m[1]);
+        if (!role) return null;
+        if (!me) return '这个我不知道，我是帮你管照片的，家里的事你比我清楚。';
+        if (me.role === role) {
+            const up = UP_ROLES.includes(role);
+            return `你说笑了，你已经是家里的${role}了，没有更往${up ? '上' : '下'}的${role}了。`;
+        }
+        const target = members.find((x) => x.role === role && x.qq !== me.qq);
+        if (target) return `你的${role}是${target.name}，QQ号${target.qq}那位。`;
         return null;
     }
-    const me = z1 ? 'zhx1' : 'zhx2';
-    if (/^我是谁[？?]?$|^我是谁呀[？?]?$/.test(t)) return `你是${me}。`;
-    if (/我(哥|哥哥|大哥)是谁/.test(t)) return z1 ? '你自己就是大哥，上头没有哥。' : '你哥是 zhx1。';
-    if (/我(弟|弟弟|小弟)是谁/.test(t)) return z2 ? '你就是弟弟，没有弟。' : '你弟是 zhx2。';
-    if (/zhx1是谁|谁是zhx1/i.test(t)) return z1 ? '就是你，家里的大哥。' : '你哥是 zhx1，家里的大哥。';
-    if (/zhx2是谁|谁是zhx2/i.test(t)) return z2 ? '就是你，家里的弟弟。' : '你弟是 zhx2，家里的弟弟。';
+
+    // 「X 是谁」
+    for (const mem of members) {
+        if (t.includes(mem.name) && /是谁|是哪位/.test(t)) {
+            return mem.qq === String(who) ? `就是你呀，家里的${mem.role}。` : `${mem.name}是家里的${mem.role}。`;
+        }
+    }
     return null;
 }
 
