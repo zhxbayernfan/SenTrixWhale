@@ -425,8 +425,16 @@ async function think(userText, who) {
         const span = times.length ? `，照片时间 ${times[0]} 到 ${times[times.length - 1]}` : '';
         const lines = (hits.events || []).map(e => `- ${e.date} ${e.place}：${e.summary}`).join('\n');
         // [FIX-12] 有描述才能"聊照片"：把画面内容一起给模型，它才说得出"那张有樱花和琵琶"
+        // [证据分级] 问"哪张/有没有"只给标题，问"什么样/在干什么"才给全文。
+        // 每条描述 100-300 字，三条就 600+，全给会挤掉角色卡和规则。
+        // 默认给全文；只有"在找照片"（哪张/有没有/几张）才只给标题。
+        // 反过来判（问"是什么"才给全文）会漏掉"是谁""在哪""那张照片"这些也要细节的（1120 实测 24/28）。
+        const _briefOnly = /哪张|哪一张|有没有|几张|找一张|找找|翻翻/.test(userText);
+        const _brief = (t) => { const v = String(t || ''); return v.slice(0, 46) + (v.length > 46 ? '…' : ''); };
         const descs = (hits.items || []).filter(x => x && x.desc)
-            .map(x => `- ${String(x.time || '').slice(0, 10)}\n  相册（地理位置）：${x.scope || '（没记）'}\n  画面里的地点：${x.place || '（没记）'}\n  画面：${x.desc}${x.objects ? '\n  元素：' + x.objects : ''}`).join('\n');
+            .map(x => !_briefOnly
+                ? `- ${String(x.time || '').slice(0, 10)}\n  相册（地理位置）：${x.scope || '（没记）'}\n  画面里的地点：${x.place || '（没记）'}\n  画面：${x.desc}${x.objects ? '\n  元素：' + x.objects : ''}`
+                : `- ${String(x.time || '').slice(0, 10)}｜${_brief(x.desc)}`).join('\n');
         const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
         // 用户说"这几张/这三张/哪张是"时，指代的是刚才聊过的那几张，不是这次检索到的
         const _refWords = /这几张|这三张|那几张|哪张|哪一个|最早|最晚|最近|比较/;
