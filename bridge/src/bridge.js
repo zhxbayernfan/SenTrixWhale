@@ -39,9 +39,9 @@ function logChat(who, userText, reply, usage) {
 
 // 身份识别字典（借鉴家人鲸WHO_NOTE思路）
 const WHO_NOTE = {
-    '1303425363': { name: 'zhx1', role: '哥哥' },
-    '1309459509': { name: 'zhx2', role: '弟弟' },
-    // 1119 加的体验者，不是家里人。角色标"朋友"，避免被当成兄弟之一。
+    // 名字和关系以 config.family 为准（那边还有 aliases）；这里只兜底给个名字。
+    '1303425363': { name: 'zhx', role: '堂哥' },
+    '1309459509': { name: 'zyn', role: '堂妹' },
     '1799833873': { name: '小林', role: '朋友' }
 };
 
@@ -721,11 +721,12 @@ const UP_ROLES = ['哥哥', '姐姐', '爸爸', '妈妈', '老公', '老婆'];
 function identityHint(text, who) {
     const me = memberByQq(who);
     if (!me) return '';
-    const m = String(text || '').match(/我(哥|哥哥|大哥|弟|弟弟|小弟|姐|姐姐|妹|妹妹|老公|老婆|爸|爸爸|妈|妈妈)(?=拍|的|说|那|和)/);
+    const m = String(text || '').match(/我(哥|哥哥|大哥|弟|弟弟|小弟|姐|姐姐|妹|妹妹|堂哥|堂妹|表哥|表妹|老公|老婆|爸|爸爸|妈|妈妈)(?=拍|的|说|那|和)/);
     if (!m) return '';
-    const role = relOf(m[1]);
-    if (!role || me.role !== role) return '';
-    return `\n\n【先纠一句】用户说"我${m[1]}"，但他自己就是家里的${me.role}，没有${role}。`
+    const word = m[1];
+    const hitSelf = me.role === word || (me.aliases || []).includes(word);
+    if (!hitSelf) return '';
+    return `\n\n【先纠一句】用户说"我${word}"，但他自己就是家里的${me.role}，没有别的${me.role}。`
         + `先纠正（比如"你说笑了，你自己就是${me.role}，没有${role}"），再答后面的问题，两件事都要说。`;
 }
 
@@ -741,18 +742,20 @@ function identityAsk(text, who) {
         return note && note.name && note.name !== '新朋友' ? `你是${note.name}。` : null;
     }
 
-    // 「我X是谁」
+    // 「我X是谁」——X 可能是"哥""堂哥""妹"，都从 aliases 里认
+    // 只认"是谁"这类完整问句。"我哥拍的…"是复合题，交给 identityHint 提示、
+    // 再由模型答照片；否则 identityAsk 直接返回身份答案，照片问题就丢了（1120 实测）。
     const m = t.match(/我(.{1,3}?)(?:是谁|是哪位|是哪个)/);
     if (m) {
-        const role = relOf(m[1]);
-        if (!role) return null;
+        const word = m[1];
+        const hitSelf = (x) => x.role === word || (x.aliases || []).includes(word);
         if (!me) return '这个我不知道，我是帮你管照片的，家里的事你比我清楚。';
-        if (me.role === role) {
-            const up = UP_ROLES.includes(role);
-            return `你说笑了，你已经是家里的${role}了，没有更往${up ? '上' : '下'}的${role}了。`;
+        if (hitSelf(me)) {
+            const up = UP_ROLES.includes(me.role) || /哥|姐|爸|妈/.test(me.role);
+            return `你说笑了，你已经是家里的${me.role}了，没有更往${up ? '上' : '下'}的${me.role}了。`;
         }
-        const target = members.find((x) => x.role === role && x.qq !== me.qq);
-        if (target) return `你的${role}是${target.name}，QQ号${target.qq}那位。`;
+        const target = members.find((x) => x.qq !== me.qq && hitSelf(x));
+        if (target) return `你的${target.role}是${target.name}，QQ号${target.qq}那位。`;
         return null;
     }
 
