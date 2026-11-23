@@ -506,6 +506,9 @@ async function think(userText, who) {
     const _meRole = _me ? _me.role : '';
     const _famLine = _fam.map((m) => `${m.name}（QQ ${m.qq}）= ${m.role}`).join('、');
     let sys = (roleText() || '') + '\n\n'
+        // 参考权重：4B 注意力弱，长对话容易把角色卡淹没，先告诉她什么优先
+        + '【参考权重】角色卡 5 / 相册里的证据 3 / 对话历史 2。冲突时以角色卡为准；'
+        + '证据和角色卡冲突时，先说事实，再按角色卡的语气讲。\n\n'
         + `现在是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日 ${_hh}:${_mm}。问到几点就按这个答，不知道就说不清楚，不许编。`
         + '\n\n' + memBlock   // 记忆证据必须拼进来（重写 sys 时漏过，检索白做了）
         + '\n\n【说话方式】像老朋友聊天：短、自然、有事说事。不报数字、不甩文件名、不列清单、不说"检索到"。'
