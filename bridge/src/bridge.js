@@ -272,6 +272,26 @@ async function shwSearch(query) {
         // 时间窗一条都没有 → 用户很可能记错了年份/月份。去掉时间窗重搜，
         // 命中了再让她说"你说的是XXXX那张吗"（1119 实测说错年份她直接答"没存"）。
         let timeMiss = false;
+        // 兜底：按"同月同日"跨年找。用户说"2015年4月30日回小学"，库里其实有
+        // 2025-04-30 那张，但描述里没有"小学"三个字，语义搜不到（1123 实测）。
+        if (tr && (!_j.items || !_j.items.length)) {
+            try {
+                const mmdd = String(tr.from || '').slice(5, 10);
+                if (/^\d{2}-\d{2}$/.test(mmdd)) {
+                    const ra = await fetch(cfg.shw.apiBase + '/api/v1/assets?limit=1000',
+                        { signal: AbortSignal.timeout(20000) });
+                    if (ra.ok) {
+                        const ja = await ra.json();
+                        const same = (ja.items || []).filter((a) => String(a.captured_at || '').slice(5, 10) === mmdd).slice(0, 3);
+                        if (same.length) {
+                            _j = { items: same.map((a) => ({ asset: a, score: 1 })) };
+                            timeMiss = true;
+                            log('[SHW] 同月同日兜底命中 ' + same.length + ' 张 (' + mmdd + ')');
+                        }
+                    }
+                }
+            } catch (e) { log('[SHW] 同月同日兜底失败: ' + e.message); }
+        }
         if (tr && (!_j.items || !_j.items.length)) {
             log('[SHW] 时间窗=' + tr.label + ' 无结果，去掉时间窗重搜');
             // 用全库 + 无时间窗：scope 可能本身就是错的（"德国慕尼黑" vs 库里的"巴伐利亚"），
