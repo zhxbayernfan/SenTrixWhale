@@ -255,7 +255,7 @@ async function shwSearch(query) {
 
         // [FIX-9] SHW 的 time_range 过滤在本机会抛 "naive/aware datetime" 错, metadata 通道降级,
         // 于是它仍会把 2023 年的照片当"上周"返回. 这里不信任服务端过滤, 取回后本地按日期硬筛.
-        const buildUrl = (sc, withTime = true) => cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(query) + '&top_k=10'
+        const buildUrl = (sc, withTime = true, q = query) => cfg.shw.apiBase + cfg.shw.retrievalEndpoint + '?q=' + encodeURIComponent(q) + '&top_k=10'
             + (tr && withTime ? '&time_range=' + encodeURIComponent(tr.label) : '')
             + (sc ? '&scope_id=' + encodeURIComponent(sc) : '');
 
@@ -276,7 +276,13 @@ async function shwSearch(query) {
             log('[SHW] 时间窗=' + tr.label + ' 无结果，去掉时间窗重搜');
             // 用全库 + 无时间窗：scope 可能本身就是错的（"德国慕尼黑" vs 库里的"巴伐利亚"），
             // 再拿它去搜一次还是空。
-            r = await fetch(buildUrl('', false), { signal: AbortSignal.timeout(20000) });
+            // 去掉时间词再搜：query 里带着"2027年1月1日"会把语义检索带偏
+            // （1123 实测：问 2027 年那张德国照片，纯语义第一条命中的是杭州商场）
+            const _pure = String(query)
+                .replace(/[0-9]{4}\s*年(\s*[0-9]{1,2}\s*月)?(\s*[0-9]{1,2}\s*[日号])?/g, '')
+                .replace(/[0-9]{1,2}\s*月\s*[0-9]{1,2}\s*[日号]/g, '')
+                .replace(/\s+/g, ' ').trim() || query;
+            r = await fetch(buildUrl('', false, _pure), { signal: AbortSignal.timeout(20000) });
             if (r.ok) {
                 const j2 = await r.json();
                 if (j2.items && j2.items.length) { _j = j2; timeMiss = true; }
@@ -437,9 +443,12 @@ async function think(userText, who) {
                 : `- ${String(x.time || '').slice(0, 10)}｜${_brief(x.desc)}`).join('\n');
         const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
         // 用户说"这几张/这三张/哪张是"时，指代的是刚才聊过的那几张，不是这次检索到的
-        const _refWords = /这几张|这三张|那几张|哪张|哪一个|最早|最晚|最近|比较/;
+        // 指代触发词："这几张"是复数，另一些是单数指代（"建筑上写的""它上面"），
+        // 后者只要有一张就够——问"建筑上写的什么字"时检索会飘到别的照片上（1123 实测）。
+        const _refWords = /这几张|这三张|那几张|哪张|哪一个|最早|最晚|最近|比较|建筑|上面写|写的什么|它上面|那张图/;
         const _refList = _prevPhotos;
-        const _refLines = (_refWords.test(userText) && _refList.length > 1)
+        const _needMany = /这几张|这三张|那几张|比较|最早|最晚/;
+        const _refLines = (_refWords.test(userText) && _refList.length >= (_needMany.test(userText) ? 2 : 1))
             ? _refList.filter((x) => x.desc).map((x) => `- ${String(x.time || '').slice(0, 10)}：${x.desc}`).join('\n')
             : '';
         const _refBlock = _refLines
