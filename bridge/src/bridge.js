@@ -1040,6 +1040,8 @@ async function handle(userText, senderId, dest, imgs) {
 }
 
 async function _handleInner(userText, senderId, dest, imgs) {
+    // 每轮开始重置表情额度：一轮最多一张，避免刷屏
+    try { resetStickerRound(); } catch (e) {}
     // 身份识别：使用WHO_NOTE字典
     const currentUserQQ = String(senderId);
     const whoInfo = getWhoNote(currentUserQQ);
@@ -1361,9 +1363,15 @@ async function replyTo(dest, text, userInput) {
     text = stripCatchphrase(text);
     const msg = [{ type: 'text', data: { text } }];
     // 匹配表情包
-    const stickerFile = matchSticker(text, userInput);
+    let stickerFile = matchSticker(text, userInput);
+    if (stickerFile && !takeRoundTicket()) stickerFile = null;   // 每轮最多一张
     if (stickerFile) {
-        const stickerPath = path.join(ROOT, 'bridge', 'stickers', stickerFile);
+        // matchSticker 返回的是完整路径（resolveSticker().fp），别再拼一次。
+        // 以前这里 path.join 拼成了 "…/stickers/…/stickers/xx.webp"，existsSync 恒 false，
+        // 所以表情从来没发出去过（1123 实测）。
+        const stickerPath = path.isAbsolute(stickerFile)
+            ? stickerFile
+            : path.join(ROOT, 'bridge', 'stickers', stickerFile);
         if (fs.existsSync(stickerPath)) {
             // 读取文件并转为base64
             const b64 = fs.readFileSync(stickerPath).toString('base64');
