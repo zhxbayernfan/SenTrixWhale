@@ -293,9 +293,9 @@ async function assetsUnderScope(scope) {
     });
 }
 
-let albumIndex = { at: 0, map: new Map() };
+// 不做缓存：52 个文件 walk 一次只要 ~1ms，而缓存 5 分钟会让刚导入的照片
+// 在 scope 补候选里"看不见"（1124 重传事件 011 就撞了这个：新图入完，检索仍走旧索引）。
 function localAlbumIndex() {
-    if (albumIndex.map.size && Date.now() - albumIndex.at < 5 * 60 * 1000) return albumIndex.map;
     const root = path.join(ROOT, 'media', 'photos');
     const map = new Map();
     const walk = (dir, rel) => {
@@ -309,19 +309,23 @@ function localAlbumIndex() {
         }
     };
     walk(root, '');
-    albumIndex = { at: Date.now(), map };
-    log('[相册] 本地索引 ' + map.size + ' 张');
     return map;
 }
 
-async function eventsInRange(from, to) {
+async function eventsInRange(from, to, scope) {
     const days = await timelineDays();
     const out = [];
     for (const d of days) {
         if (d.date < from || d.date > to) continue;
         for (const e of (d.events || [])) {
             const sum = String(e.summary || '').replace(/\s+/g, ' ').trim();
-            if (!sum) continue;
+            if (!sum || sum === '待总结事件') continue;
+            // 有地点条件时只留同城的：否则问"深圳 4/30"，杭州当天的事件会一起进来。
+            if (scope) {
+                const city = scope.split('/').pop();
+                const where = String(e.admin_district || e.place || '');
+                if (!where.includes(city)) continue;
+            }
             out.push({ date: d.date, place: String(e.place || '').slice(-12), summary: sum.slice(0, 90) });
         }
     }
@@ -449,7 +453,7 @@ async function shwSearch(query, who) {
                 }
             } catch (e) { log('[SHW] 时间窗补充失败: ' + e.message); }
         }
-        if (scope) log('[SHW] 按相册过滤: ' + scope);
+        if (scope) log('[SHW] 按相册过滤: ' + scope); else log('[SHW] scope 为空，走全库');
         const j = _j;   // body 已经消费过，不能再 json() 一次
         const seen = new Set();
         let _cand = (j.items || []);
@@ -509,7 +513,9 @@ async function shwSearch(query, who) {
         // 只按时间信就会答"没存"（1119 实测：问"2025年12月词云海报"，时间窗里只有猫）。
         if (tr && !timeMiss) {
             try {
-                const ra = await fetch(buildUrl('', false), { signal: AbortSignal.timeout(20000) });
+                // 有时间窗时补"时间外候选"也要守住 scope：1124 实测，
+                // 没带 scope 时把杭州 04-30 塞进了深圳那次检索，模型拿它当答案。
+                const ra = await fetch(buildUrl(scope, false), { signal: AbortSignal.timeout(20000) });
                 if (ra.ok) {
                     const ja = await ra.json();
                     const seenFile = new Set(items.map((x) => x.file).filter(Boolean));
@@ -523,7 +529,7 @@ async function shwSearch(query, who) {
                 }
             } catch (e) { /* 补充检索失败不影响主结果 */ }
         }
-        const events = tr && !timeMiss ? await eventsInRange(tr.from, tr.to) : [];
+        const events = tr && !timeMiss ? await eventsInRange(tr.from, tr.to, scope) : [];
         if (altItems.length) {
             await Promise.all(altItems.map(async (it) => {
                 try {
@@ -643,7 +649,7 @@ async function think(userText, who) {
         const _brief = (t) => { const v = String(t || ''); return v.slice(0, 46) + (v.length > 46 ? '…' : ''); };
         const descs = (hits.items || []).filter(x => x && x.desc)
             .map(x => !_briefOnly
-                ? `- ${String(x.time || '').slice(0, 10)}\n  相册（地理位置）：${x.scope || '（没记）'}\n  画面里的地点：${x.place || '（没记）'}\n  画面：${x.desc}${x.objects ? '\n  元素：' + x.objects : ''}${x.people ? '\n  画面里的人：' + x.people.join('、') : ''}`
+                ? `- ${String(x.time || '').slice(0, 10)}\n  ${x.people ? '画面里的人：' + x.people.join('、') + '\n  ' : ''}相册（地理位置）：${x.scope || '（没记）'}\n  画面里的地点：${x.place || '（没记）'}\n  画面：${x.desc}${x.objects ? '\n  元素：' + x.objects : ''}`
                 : `- ${String(x.time || '').slice(0, 10)}｜${_brief(x.desc)}${x.people ? '（' + x.people.join('、') + '）' : ''}`).join('\n');
         const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
         // 用户说"这几张/这三张/哪张是"时，指代的是刚才聊过的那几张，不是这次检索到的
@@ -749,7 +755,8 @@ async function think(userText, who) {
         + '\n· 用户质疑某个细节（"那是夕阳吗？不是灯吗"）→ 先在证据里找原句；证据里两种都提到了就都说，别只咬一个。'
         + '\n· 证据里确实没写的，才说"这个我没看到"。'
         + '\n\n【别用口头禅】不要每轮结尾都追问"现在想聊点啥？"，自然收尾就好。'
-        + '\n你是工程鲸，不是家里的任何一个人。'
+        + '\n你是工程鲸，不是家里的任何一个人。证据里"画面里的人"是照片里的人，不是你自己，不许用"我"指代他们。'
+        + '\n· 证据写了"画面里的人"时，问"是谁"就直接把那几个人说出来，不许说"认不出"。'
         // 必须告诉她"此刻在跟谁说话"，并把兄弟关系写成她照着能答的短句。
         + `\n\n【身份速查】现在是 ${_whoName}（${who}）在跟你说话。`
         + (_famLine ? `\n· 家里的人：${_famLine}。` : '')
@@ -950,7 +957,7 @@ function personLabel(name, viewer) {
     const n = String(name || '').trim();
     if (!n) return n;
     // 称谓随说话人变：妹夫对 zyn 是"你男朋友"，对自己才是"你"。
-    if (viewer && n === viewer) return '你';
+    if (viewer && n === viewer) return '你本人';
     if (n === '妹夫' && viewer === 'zyn') return '你男朋友';
     const m = familyMembers().find((x) => x.name === n || (x.aliases || []).includes(n));
     return m ? `${n}（${m.role}）` : n;
