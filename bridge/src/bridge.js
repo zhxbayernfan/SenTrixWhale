@@ -443,6 +443,18 @@ async function think(userText, who) {
     log('[think] 今日累计调用: ' + daily.calls);
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
     const hits = await shwSearch(userText);
+    // [发图] 用户在要照片（"给我一张""发我一张"），不是问照片里有什么
+    _pendingPhotoSend = null;
+    try {
+        const _wantPhoto = /给我.{0,4}(一张|张|照片)|发我.{0,4}(一张|张|照片)|来一张|随便.{0,3}张|看看.{0,3}照片/.test(userText)
+            && !/里面|什么|是谁|在哪|什么时候|干什么|穿什么/.test(userText);
+        const _first = (hits && hits.items || [])[0];
+        if (_wantPhoto && _first && _first.id) {
+            _pendingPhotoSend = _first.id;
+            log('[发图] 准备附带资产图: ' + _first.id);
+        }
+    } catch (e) { /* 不影响正常回答 */ }
+
     // 用"上一次"的照片做指代（这次检索命中的是"这几张"问句本身搜出来的东西，
     // 拿它当指代就成了自指——1120 实测：问"这三张最早的是哪张"，指代成了博物馆和电梯）
     const _prevPhotos = (_recentPhotos.get(String(who)) || []).slice(0, 3);
@@ -1060,6 +1072,8 @@ let lastCall = 0;
 const _lastNum = new Map();   // 每个用户上一条是不是数字消息
 // 每个人最近存的那张图（含看图描述）——用户追问「这张」「刚才那张」时要用
 const _lastPhoto = new Map();
+// [发图] 用户要照片时，这一轮要附带的资产 id（think 里算，replyTo 里用）
+let _pendingPhotoSend = null;
 // [指代] 最近一次检索真正聊到的几张照片。用户说"这几张/这三张"时，
 // 每次重新检索会搜到别的照片（1120 实测：问"这三张里最早的是哪张"，搜回来的是
 // 商场电梯和博物馆），所以得记住刚才聊的是哪几张。
@@ -1455,6 +1469,21 @@ async function replyTo(dest, text, userInput) {
     text = stripCatchphrase(text);
     const msg = [{ type: 'text', data: { text } }];
     // 匹配表情包
+    // [发图] 用户要照片 → 从库里取那张的预览图发过去（不是表情包）
+    if (_pendingPhotoSend) {
+        try {
+            const pr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(_pendingPhotoSend) + '/preview',
+                { signal: AbortSignal.timeout(15000) });
+            if (pr.ok) {
+                const buf = Buffer.from(await pr.arrayBuffer());
+                msg.push({ type: 'image', data: { file: 'base64://' + buf.toString('base64') } });
+                log('[发图] 已发送 ' + _pendingPhotoSend + '（' + Math.round(buf.length / 1024) + 'KB）');
+            } else {
+                log('[发图] 取图失败 HTTP ' + pr.status);
+            }
+        } catch (e) { log('[发图] 取图失败: ' + e.message); }
+        _pendingPhotoSend = null;
+    }
     let stickerFile = matchSticker(text, userInput);
     if (stickerFile && !takeRoundTicket()) stickerFile = null;   // 每轮最多一张
     if (stickerFile) {
