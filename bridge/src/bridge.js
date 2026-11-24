@@ -64,6 +64,31 @@ const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 const LOG = path.join(ROOT, 'state', 'bridge.log');
 fs.mkdirSync(path.join(ROOT, 'state'), { recursive: true });
 
+// ---------- 照片→人物 人工标注（data/people_map.json） ----------
+// SHW 的 people_json 没有写入口、也不参与检索（corrections.py 的白名单不含它），
+// 所以"这张照片里是谁"由 STW 侧维护，检索命中时注入证据。
+// 表很小（十几条），按 mtime 热加载，改完不用重启。
+const PEOPLE_MAP = path.join(ROOT, 'data', 'people_map.json');
+let peopleMap = {};
+let peopleMapMtime = 0;
+function loadPeopleMap() {
+    try {
+        const st = fs.statSync(PEOPLE_MAP);
+        if (st.mtimeMs !== peopleMapMtime) {
+            peopleMap = JSON.parse(fs.readFileSync(PEOPLE_MAP, 'utf8'));
+            peopleMapMtime = st.mtimeMs;
+            log('[人物] 标注表 ' + Object.keys(peopleMap).filter((k) => !k.startsWith('_')).length + ' 条');
+        }
+    } catch (e) { /* 没有标注表就空转 */ }
+    return peopleMap;
+}
+function peopleOf(file) {
+    if (!file) return null;
+    const m = loadPeopleMap();
+    const hit = m[file] || m[String(file).split('/').pop()];
+    return Array.isArray(hit) && hit.length ? hit : null;
+}
+
 // 进程级兜底: 未捕获异常只记日志不退出
 process.on('uncaughtException', (e) => { try { fs.appendFileSync(LOG, new Date().toISOString() + ' [uncaught] ' + (e.stack || e.message) + '\n'); } catch {} });
 process.on('unhandledRejection', (e) => { try { fs.appendFileSync(LOG, new Date().toISOString() + ' [unhandledRejection] ' + ((e && e.stack) || String(e)) + '\n'); } catch {} });
@@ -226,6 +251,56 @@ async function timelineDays() {
     return tlCache.days;
 }
 
+// SHW 的 scope_id 是精确匹配：查"广东/深圳"查不到"广东/深圳/福田"。
+// 深圳那张 0430 就漏在子相册里，只剩一张 0503，模型于是被全库语义带跑（→厦门）。
+// 这里按 assets 的 place 反解出相册路径，补上前缀匹配的候选。
+let scopeCache = { at: 0, items: [] };
+async function allAssets() {
+    if (scopeCache.items.length && Date.now() - scopeCache.at < 5 * 60 * 1000) return scopeCache.items;
+    try {
+        const r = await fetch(cfg.shw.apiBase + '/api/v1/assets?limit=1000', { signal: AbortSignal.timeout(20000) });
+        if (!r.ok) return scopeCache.items;
+        const j = await r.json();
+        const items = (j.items || []).filter((a) => a.file_name);
+        scopeCache = { at: Date.now(), items };
+        log('[SHW] assets 缓存 ' + items.length + ' 条');
+        return items;
+    } catch (e) { log('[SHW] assets 拉取失败: ' + e.message); return scopeCache.items; }
+}
+
+async function assetsUnderScope(scope) {
+    // 相册归属以本地归档目录为准（media/photos/<相册>/<文件名>），
+    // 不用 assets.place 反解：深圳那张 0430 的 place 是空串，反解不出来。
+    const all = await allAssets();
+    const idx = localAlbumIndex();
+    return all.filter((a) => {
+        const album = idx.get(a.file_name);
+        if (!album) return false;
+        return album === scope || album.startsWith(scope + '/');
+    });
+}
+
+let albumIndex = { at: 0, map: new Map() };
+function localAlbumIndex() {
+    if (albumIndex.map.size && Date.now() - albumIndex.at < 5 * 60 * 1000) return albumIndex.map;
+    const root = path.join(ROOT, 'media', 'photos');
+    const map = new Map();
+    const walk = (dir, rel) => {
+        let entries = [];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+            const full = path.join(dir, e.name);
+            const r = rel ? rel + '/' + e.name : e.name;
+            if (e.isDirectory()) walk(full, r);
+            else if (/\.jpg$/i.test(e.name)) map.set(e.name, rel);
+        }
+    };
+    walk(root, '');
+    albumIndex = { at: Date.now(), map };
+    log('[相册] 本地索引 ' + map.size + ' 张');
+    return map;
+}
+
 async function eventsInRange(from, to) {
     const days = await timelineDays();
     const out = [];
@@ -262,6 +337,20 @@ async function shwSearch(query) {
         let r = await fetch(buildUrl(scope), { signal: AbortSignal.timeout(20000) });
         if (!r.ok) { log('[SHW] HTTP ' + r.status); return null; }
         let _j = await r.json();
+        // scope 精确命中后，把子相册的也补进来（广东/深圳 → 广东/深圳/福田）
+        if (scope) {
+            try {
+                const extra = await assetsUnderScope(scope);
+                const seenExtra = new Set((_j.items || []).map((x) => (x.asset || {}).file_name).filter(Boolean));
+                const add = extra.filter((a) => !seenExtra.has(a.file_name))
+                    .sort((a, b) => String(b.captured_at || '').localeCompare(String(a.captured_at || '')))
+                    .map((a) => ({ asset: a, score: 0.5 }));
+                if (add.length) {
+                    _j = { items: [...(_j.items || []), ...add] };
+                    log('[SHW] scope 前缀补 ' + add.length + ' 条 (' + scope + ')');
+                }
+            } catch (e) { log('[SHW] scope 前缀补充失败: ' + e.message); }
+        }
         // 带 scope 一条都没有时回退到全库，避免"地名解析对了但相册是空的"直接答没存
         if (scope && (!_j.items || !_j.items.length)) {
             log('[SHW] scope=' + scope + ' 无结果，回退全库');
@@ -363,6 +452,10 @@ async function shwSearch(query) {
                 }
             } catch (e) { /* 单条失败不影响整轮 */ }
         }));
+        for (const it of items) {
+            const ppl = peopleOf(it.file);
+            if (ppl) it.people = ppl;
+        }
         if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
         // 带时间窗时再跑一次纯语义检索：用户可能记错时间，而时间窗里恰好有别的照片，
         // 只按时间信就会答"没存"（1119 实测：问"2025年12月词云海报"，时间窗里只有猫）。
@@ -479,8 +572,8 @@ async function think(userText, who) {
         const _brief = (t) => { const v = String(t || ''); return v.slice(0, 46) + (v.length > 46 ? '…' : ''); };
         const descs = (hits.items || []).filter(x => x && x.desc)
             .map(x => !_briefOnly
-                ? `- ${String(x.time || '').slice(0, 10)}\n  相册（地理位置）：${x.scope || '（没记）'}\n  画面里的地点：${x.place || '（没记）'}\n  画面：${x.desc}${x.objects ? '\n  元素：' + x.objects : ''}`
-                : `- ${String(x.time || '').slice(0, 10)}｜${_brief(x.desc)}`).join('\n');
+                ? `- ${String(x.time || '').slice(0, 10)}\n  相册（地理位置）：${x.scope || '（没记）'}\n  画面里的地点：${x.place || '（没记）'}\n  画面：${x.desc}${x.objects ? '\n  元素：' + x.objects : ''}${x.people ? '\n  画面里的人：' + x.people.join('、') : ''}`
+                : `- ${String(x.time || '').slice(0, 10)}｜${_brief(x.desc)}${x.people ? '（' + x.people.join('、') + '）' : ''}`).join('\n');
         const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
         // 用户说"这几张/这三张/哪张是"时，指代的是刚才聊过的那几张，不是这次检索到的
         // 指代触发词："这几张"是复数，另一些是单数指代（"建筑上写的""它上面"），
