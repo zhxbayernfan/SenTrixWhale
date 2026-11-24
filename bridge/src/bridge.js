@@ -379,7 +379,13 @@ async function shwSearch(query, who) {
         // 兜底：按"同月同日"跨年找。两个改进（1124 实测）：
         // 1. 不再要求"去窗语义搜也空"——语义搜常命中的是别的东西（"回小学"命中西安汤面）；
         // 2. from 和 to 都查——用户只说"2015年4月"时 from 是 04-01，而照片在 04-30。
-        if (tr) {
+        // 只在"时间窗内一条都没有"时才兜底。之前是无条件跑，还把 timeMiss 置 true，
+        // 于是 04-30 明明有 3 张，过滤被整段跳过，模型看到的是语义排序前 5（12 月的猫）。
+        const _inWindow = tr ? (_j.items || []).filter((x) => {
+            const d = String((x.asset || {}).captured_at || '').slice(0, 10);
+            return d >= tr.from && d <= tr.to;
+        }) : [];
+        if (tr && _inWindow.length === 0) {
             try {
                 const cands = [String(tr.from || '').slice(5, 10), String(tr.to || '').slice(5, 10)]
                     .filter((d, i, arr) => /^\d{2}-\d{2}$/.test(d) && arr.indexOf(d) === i);
@@ -425,9 +431,17 @@ async function shwSearch(query, who) {
             try {
                 const all = await allAssets();
                 const seenIn = new Set((_j.items || []).map((x) => (x.asset || {}).file_name).filter(Boolean));
+                // 有地点条件时，时间窗补充也要按相册过滤，否则同一天别的城市那张会混进来：
+                // "4月30日在杭州拍了几张"会数成 4 张（杭州 3 + 深圳 1）。
+                const _idx = scope ? localAlbumIndex() : null;
                 const inRange = all.filter((a) => {
                     const d = String(a.captured_at || '').slice(0, 10);
-                    return d && d >= tr.from && d <= tr.to && !seenIn.has(a.file_name);
+                    if (!(d && d >= tr.from && d <= tr.to)) return false;
+                    if (_idx) {
+                        const alb = _idx.get(a.file_name);
+                        if (!alb || !(alb === scope || alb.startsWith(scope + '/'))) return false;
+                    }
+                    return !seenIn.has(a.file_name);
                 });
                 if (inRange.length) {
                     _j = { items: [...(_j.items || []), ...inRange.map((a) => ({ asset: a, score: 0.4 }))] };
@@ -440,7 +454,7 @@ async function shwSearch(query, who) {
         const seen = new Set();
         let _cand = (j.items || []);
         if (tr) _cand = [..._cand].sort((a, b) => String((b.asset || {}).captured_at || '').localeCompare(String((a.asset || {}).captured_at || '')));
-        const items = _cand.filter(it => {   // [FIX-6] 同一张图会返回多条, 按文件名去重
+        const _filteredAll = _cand.filter(it => {   // [FIX-6] 同一张图会返回多条, 按文件名去重
             const a = it.asset || {};
             if (!a.file_name || seen.has(a.file_name)) return false;
             // [FIX-9] 只留落在时间区间内的；但 timeMiss 说明用户报错了时间、
@@ -450,7 +464,8 @@ async function shwSearch(query, who) {
                 if (!day || day < tr.from || day > tr.to) return false;
             }
             seen.add(a.file_name); return true;
-        }).slice(0, 5).map(it => ({
+        });
+        const items = _filteredAll.slice(0, 5).map(it => ({
             id: it.asset.id,
             file: it.asset.file_name,
             time: it.asset.captured_at,
@@ -522,7 +537,7 @@ async function shwSearch(query, who) {
             }));
             log('[SHW] 另补 ' + altItems.length + ' 条（时间窗外的候选）');
         }
-        return { count: items.length, items, events, scope, timeMiss, askedTime: tr ? tr.label : '', altItems };
+        return { count: items.length, total: _filteredAll.length, items, events, scope, timeMiss, askedTime: tr ? tr.label : '', altItems };
     } catch (e) { log('[SHW] 检索失败: ' + e.message); return null; }
 }
 
@@ -1287,6 +1302,25 @@ async function _handleInner(userText, senderId, dest, imgs) {
     const userRole = whoInfo.role;
     // 处理照片计数查询
     if (userText.includes('几张') || userText.includes('多少张') || userText.includes('照片数量')) {
+        // [条件计数] "25年4月30日在杭州拍了几张"原来直接命中这里，回的是全库 52 张。
+        // 先看有没有时间/地点条件：有就走检索，按命中总数答；没有才报总库数。
+        let _tr = null;
+        let _scope = '';
+        try {
+            _tr = timeRangeOf(userText);
+            const pl = resolveAlbum(userText, { homeProvince: (cfg.album && cfg.album.homeProvince) || '广东' });
+            if (pl && pl.path) _scope = pl.path;
+        } catch (e) { /* 解析失败按无条件处理 */ }
+        if (_tr || _scope) {
+            const hits = await shwSearch(userText, senderId);
+            const n = hits ? (hits.total ?? hits.count ?? 0) : 0;
+            const _where = _scope ? `《${_scope}》` : '';
+            const _when = _tr ? _tr.label : '';
+            const reply = n > 0 ? `${_when}${_where}一共 ${n} 张` : `${_when}${_where}这个我没存到`;
+            chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: reply });
+            await replyTo(dest, reply, userText);
+            return;
+        }
         const count = await countPhotos();
         if (count !== null) {
             const reply = '记忆库里现在有' + count.total + '张照片呢～'; // [FIX-2]
