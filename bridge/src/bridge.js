@@ -225,6 +225,19 @@ function timeRangeOf(q) {  // [FIX-7] 时间词 -> SHW 的 time_range + 本地�
     if (/上周|上星期|这几天|最近/.test(q)) { const t = new Date(Date.now() - 7 * 864e5); return mk(t.getFullYear(), t.getMonth() + 1); }
     const ym = q.match(/(\d{4})年(\d{1,2})?月?/);
     if (ym) return ym[2] ? mk(Number(ym[1]), Number(ym[2])) : { label: `${ym[1]}年`, from: `${ym[1]}-01-01`, to: `${ym[1]}-12-31` };
+    // [时间兜底] 上面的正则只认 4 位年份，用户常说"25年4月底""4月30的"。
+    // 相册解析器（存图那条链路）本来就支持两位年份和月/日精度，直接借它的结果，
+    // 不另写一套——同一份事实抄两遍，第二遍一定会过期。
+    try {
+        const r = resolveAlbum(q, { homeProvince: (cfg.album && cfg.album.homeProvince) || '广东' });
+        if (r && r.when instanceof Date && !Number.isNaN(r.when.getTime())) {
+            const d = r.when;
+            const loc = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+            if (r.precision === 'year') return { label: `${d.getFullYear()}年`, from: `${d.getFullYear()}-01-01`, to: `${d.getFullYear()}-12-31` };
+            if (r.precision === 'month') return mk(d.getFullYear(), d.getMonth() + 1);
+            return { label: `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`, from: loc(d), to: loc(d) };
+        }
+    } catch (e) { /* 解析失败就当没有时间窗 */ }
     return null;
 }
 
@@ -315,7 +328,7 @@ async function eventsInRange(from, to) {
     return out.slice(0, 3);
 }
 
-async function shwSearch(query) {
+async function shwSearch(query, who) {
     if (!cfg.shw || !cfg.shw.enabled) return null;  // 未启用: 走本地记忆
     try {
         const tr = timeRangeOf(query);
@@ -405,10 +418,29 @@ async function shwSearch(query) {
                 if (j2.items && j2.items.length) { _j = j2; timeMiss = true; }
             }
         }
+        // [时间窗补候选] "4 月底的照片里是谁"这类问题，语义检索只按"是谁"找，
+        // 04-30 那张美术馆合影可能排在 5 名之外。把时间窗内的图都拉进来，
+        // 再按拍摄时间倒序取——问哪个月就先给那个月最新的。
+        if (tr) {
+            try {
+                const all = await allAssets();
+                const seenIn = new Set((_j.items || []).map((x) => (x.asset || {}).file_name).filter(Boolean));
+                const inRange = all.filter((a) => {
+                    const d = String(a.captured_at || '').slice(0, 10);
+                    return d && d >= tr.from && d <= tr.to && !seenIn.has(a.file_name);
+                });
+                if (inRange.length) {
+                    _j = { items: [...(_j.items || []), ...inRange.map((a) => ({ asset: a, score: 0.4 }))] };
+                    log('[SHW] 时间窗补 ' + inRange.length + ' 条 (' + tr.label + ')');
+                }
+            } catch (e) { log('[SHW] 时间窗补充失败: ' + e.message); }
+        }
         if (scope) log('[SHW] 按相册过滤: ' + scope);
         const j = _j;   // body 已经消费过，不能再 json() 一次
         const seen = new Set();
-        const items = (j.items || []).filter(it => {   // [FIX-6] 同一张图会返回多条, 按文件名去重
+        let _cand = (j.items || []);
+        if (tr) _cand = [..._cand].sort((a, b) => String((b.asset || {}).captured_at || '').localeCompare(String((a.asset || {}).captured_at || '')));
+        const items = _cand.filter(it => {   // [FIX-6] 同一张图会返回多条, 按文件名去重
             const a = it.asset || {};
             if (!a.file_name || seen.has(a.file_name)) return false;
             // [FIX-9] 只留落在时间区间内的；但 timeMiss 说明用户报错了时间、
@@ -452,9 +484,10 @@ async function shwSearch(query) {
                 }
             } catch (e) { /* 单条失败不影响整轮 */ }
         }));
+        const _viewer = memberByQq(String(who || ''))?.name || '';
         for (const it of items) {
             const ppl = peopleOf(it.file);
-            if (ppl) it.people = ppl.map(personLabel);
+            if (ppl) it.people = ppl.map((p) => personLabel(p, _viewer));
         }
         if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
         // 带时间窗时再跑一次纯语义检索：用户可能记错时间，而时间窗里恰好有别的照片，
@@ -535,14 +568,37 @@ async function think(userText, who) {
     userText = filterSurrogates(userText);
     log('[think] 今日累计调用: ' + daily.calls);
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
-    const hits = await shwSearch(userText);
+    const hits = await shwSearch(userText, who);
+    // [本人优先] 谁问就先给谁的照片：zyn 问"4 月底的照片"，先给她和妹夫那张，
+    // 而不是同一天哥哥在深圳拍的那张。
+    try {
+        const _me = memberByQq(String(who));
+        if (_me && hits && Array.isArray(hits.items) && hits.items.length > 1) {
+            const _rank = (x) => (Array.isArray(x.people) && x.people.some((p) => String(p).startsWith(_me.name)) ? 0 : 1);
+            // 本人优先，其次按拍摄时间倒序：问"4 月底"时先给 4/30 那张，
+            // 而不是同一个人 4/12 的。
+            hits.items.sort((a, b) => _rank(a) - _rank(b) || String(b.time || '').localeCompare(String(a.time || '')));
+            log('[本人优先] ' + hits.items.slice(0, 3).map((x) => (x.file || '?') + ':' + (x.people || []).join('/')).join(' | '));
+        }
+    } catch (e) { /* 排序失败不影响回答 */ }
     // [发图] 用户在要照片（"给我一张""发我一张"），不是问照片里有什么
     _pendingPhotoSend = null;
     try {
-        const _wantPhoto = /给我.{0,4}(一张|张|照片)|发我.{0,4}(一张|张|照片)|来一张|随便.{0,3}张|看看.{0,3}照片/.test(userText)
-            && !/里面|什么|是谁|在哪|什么时候|干什么|穿什么/.test(userText);
+        // [发图意图] 原来的正则只认"给我一张/给我张/给我照片"，
+        // 实际用户会说"给我25年4月底在杭州的照片""我要我的这张4月30的"，
+        // 全被判成不要图，于是只回文字。这里放宽到"动作词 + 15 字内的照片/图/张"，
+        // 再用问句词排除"哪几张/有没有/是谁"这类查记忆的问法。
+        const _wantPhoto = /(给我|发我|发个|我要|来一张|来张|看看|瞅瞅|找一张|找张).{0,15}(照片|图片|图|张)/.test(userText)
+            && !/是不是|有没有|哪一?张|几张|多少|是谁|在哪|什么时候/.test(userText);
+        // [指代] "给我那张照片/刚才那张"指上一次真正聊到的那张，不要重新检索——
+        // 1124 实测：问"给我那张照片"，检索命中了济南一张无关的。
+        const _prev = (_recentPhotos.get(String(who)) || []);
+        const _deictic = /这张|那张|刚才那|刚刚那/.test(userText);
         const _first = (hits && hits.items || [])[0];
-        if (_wantPhoto && _first && _first.id) {
+        if (_wantPhoto && _deictic && _prev.length && _prev[0].id) {
+            _pendingPhotoSend = _prev[0].id;
+            log('[发图] 按指代取上一张: ' + _pendingPhotoSend);
+        } else if (_wantPhoto && _first && _first.id) {
             _pendingPhotoSend = _first.id;
             log('[发图] 准备附带资产图: ' + _first.id);
         }
@@ -683,6 +739,7 @@ async function think(userText, who) {
         + `\n\n【身份速查】现在是 ${_whoName}（${who}）在跟你说话。`
         + (_famLine ? `\n· 家里的人：${_famLine}。` : '')
         + '\n· 证据里写「路人N」的是不认识的人：不提关系、不编故事，问是谁就说认不出。'
+        + '\n· 照片里如果是正在说话的人本人，说"你"，不要用名字；如果是她的伴侣，说"你男朋友/你老公"，不要用"妹夫"这种第三人称。'
         + (_meRole
             ? `\n· 他自己是家里的${_meRole}。问"我是谁"→"你是${_whoName}，家里的${_meRole}"；问"我X是谁"按上面的关系答；`
               + `他没有那个关系（比如哥哥问"我哥"）→"你说笑了，你已经是家里的${_meRole}了"。`
@@ -874,9 +931,12 @@ const relOf = (word) => (REL_WORDS.find(([, ws]) => ws.includes(word)) || [null]
 const familyMembers = () => ((cfg.family && cfg.family.members) || []).map((m) => ({ ...m, qq: String(m.qq) }));
 // 人物名 → "名字（关系）"。关系以 config.family 为准；表里没有的原样返回。
 // 以后接 SHW 的人物页（family-graph 的 family_role）时，只需要把这里的数据源换掉。
-function personLabel(name) {
+function personLabel(name, viewer) {
     const n = String(name || '').trim();
     if (!n) return n;
+    // 称谓随说话人变：妹夫对 zyn 是"你男朋友"，对自己才是"你"。
+    if (viewer && n === viewer) return '你';
+    if (n === '妹夫' && viewer === 'zyn') return '你男朋友';
     const m = familyMembers().find((x) => x.name === n || (x.aliases || []).includes(n));
     return m ? `${n}（${m.role}）` : n;
 }
