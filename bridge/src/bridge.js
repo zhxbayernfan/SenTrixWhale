@@ -274,19 +274,27 @@ async function shwSearch(query) {
         let timeMiss = false;
         // 兜底：按"同月同日"跨年找。用户说"2015年4月30日回小学"，库里其实有
         // 2025-04-30 那张，但描述里没有"小学"三个字，语义搜不到（1123 实测）。
-        if (tr && (!_j.items || !_j.items.length)) {
+        // 兜底：按"同月同日"跨年找。两个改进（1124 实测）：
+        // 1. 不再要求"去窗语义搜也空"——语义搜常命中的是别的东西（"回小学"命中西安汤面）；
+        // 2. from 和 to 都查——用户只说"2015年4月"时 from 是 04-01，而照片在 04-30。
+        if (tr) {
             try {
-                const mmdd = String(tr.from || '').slice(5, 10);
-                if (/^\d{2}-\d{2}$/.test(mmdd)) {
+                const cands = [String(tr.from || '').slice(5, 10), String(tr.to || '').slice(5, 10)]
+                    .filter((d, i, arr) => /^\d{2}-\d{2}$/.test(d) && arr.indexOf(d) === i);
+                if (cands.length) {
                     const ra = await fetch(cfg.shw.apiBase + '/api/v1/assets?limit=1000',
                         { signal: AbortSignal.timeout(20000) });
                     if (ra.ok) {
                         const ja = await ra.json();
-                        const same = (ja.items || []).filter((a) => String(a.captured_at || '').slice(5, 10) === mmdd).slice(0, 3);
+                        const same = (ja.items || []).filter((a) => cands.includes(String(a.captured_at || '').slice(5, 10))).slice(0, 3);
                         if (same.length) {
-                            _j = { items: same.map((a) => ({ asset: a, score: 1 })) };
+                            // 并进 altItems，保留语义结果，让模型自己挑
+                            const seen = new Set((_j.items || []).map((x) => (x.asset || {}).file_name).filter(Boolean));
+                            const extra = same.filter((a) => !seen.has(a.file_name))
+                                .map((a) => ({ asset: a, score: 1 }));
+                            _j = { items: [...(_j.items || []), ...extra] };
                             timeMiss = true;
-                            log('[SHW] 同月同日兜底命中 ' + same.length + ' 张 (' + mmdd + ')');
+                            log('[SHW] 同月同日兜底命中 ' + same.length + ' 张 (' + cands.join(',') + ')');
                         }
                     }
                 }
@@ -507,7 +515,7 @@ async function think(userText, who) {
     const _famLine = _fam.map((m) => `${m.name}（QQ ${m.qq}）= ${m.role}`).join('、');
     let sys = (roleText() || '') + '\n\n'
         // 参考权重：4B 注意力弱，长对话容易把角色卡淹没，先告诉她什么优先
-        + '【参考权重】角色卡 5 / 相册里的证据 3 / 对话历史 2。冲突时以角色卡为准；'
+        + '【参考权重】角色卡 3 / 相册里的证据 5 / 对话历史 2。冲突时以角色卡为准；'
         + '证据和角色卡冲突时，先说事实，再按角色卡的语气讲。\n\n'
         + `现在是 ${_d.getFullYear()}年${_d.getMonth() + 1}月${_d.getDate()}日 ${_hh}:${_mm}。问到几点就按这个答，不知道就说不清楚，不许编。`
         + '\n\n' + memBlock   // 记忆证据必须拼进来（重写 sys 时漏过，检索白做了）

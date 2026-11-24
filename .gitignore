@@ -45,3 +45,6 @@ AGENTS.md
 .env
 .npm/
 __pycache__/
+
+# 邮件授权码（不入库）
+.stw_mail_pass
