@@ -930,6 +930,28 @@ function parseAlbum(text) {
     return '';
 }
 
+// ── SHW 反解出的地点 → 相册路径 ──────────────────────────
+// SHW 用 pygeocn 离线反解，能到区级（"浙江省杭州市拱墅区"）。
+// bridge 自己那张 53 城市坐标表只到城市，而且没 GPS 就瞎猜——所以以 SHW 为准。
+function albumFromShwPlace(place) {
+    const t = String(place || '').trim();
+    if (!t) return null;
+    // 国内：XX省XX市XX区/县/市
+    let m = t.match(/^(.+?)省(.+?)市(.+?)(?:区|县|市)?$/);
+    if (m) {
+        const prov = m[1].replace(/(省|市|自治区|特别行政区)$/, '');
+        const city = m[2].replace(/市$/, '');
+        const dist = (m[3] || '').replace(/(区|县|市)$/, '');
+        // 直辖市的 m[1] 会是"北京市"，上面会拆坏，单独兜一下
+        if (/^(北京|上海|天津|重庆)$/.test(prov)) return `全国/${prov}/${dist || city}`;
+        return dist ? `全国/${prov}/${city}/${dist}` : `全国/${prov}/${city}`;
+    }
+    // 直辖市不带"省"字：北京市朝阳区
+    m = t.match(/^(北京|上海|天津|重庆)市?(.+?)(?:区|县)?$/);
+    if (m) return `全国/${m[1]}/${m[2].replace(/(区|县)$/, '')}`;
+    return null;
+}
+
 // ── 读 EXIF：借 PIL，不借 exif-reader ──
 // exif-reader 对华为写出来的 APP1 段会抛 "Invalid EXIF data"，
 // 而 PIL 能稳定读出 DateTime / Model / GPS IFD。
@@ -1110,6 +1132,36 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 scopeId: parsed.path,
                 shwBase: (cfg.shw && cfg.shw.apiBase) || 'http://127.0.0.1:8191',
             });
+            // 存完之后问 SHW 要反解地点（pygeocn 离线，到区级），比用户口述和
+            // bridge 那张 53 城市坐标表都准。
+            let shwPlace = '';
+            try {
+                const ar = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(r.assetId),
+                    { signal: AbortSignal.timeout(8000) });
+                if (ar.ok) {
+                    const aj = await ar.json();
+                    shwPlace = String(aj.place || '').trim();
+                }
+            } catch (e) { /* 拿不到不影响存图 */ }
+            if (shwPlace) {
+                const albumFromGps = albumFromShwPlace(shwPlace);
+                if (albumFromGps && albumFromGps !== parsed.path) {
+                    log('[存图] 地点按 SHW 校正: ' + parsed.path + ' → ' + albumFromGps + '（' + shwPlace + '）');
+                    // SHW 支持事后改归属（PATCH /assets/{id}/scope），因为 GPS 反解
+                    // 发生在入库之后，入库时还不知道它在哪个区。
+                    try {
+                        const mr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(r.assetId) + '/scope', {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ scope_id: albumFromGps }),
+                            signal: AbortSignal.timeout(8000),
+                        });
+                        if (!mr.ok) log('[存图] 改归属失败 HTTP ' + mr.status);
+                    } catch (e) { log('[存图] 改归属失败: ' + e.message); }
+                    parsed.path = albumFromGps;
+                    parsed.place = shwPlace;
+                }
+            }
             if (r.ok) {
                 log('[存图] ' + r.relFile + ' -> ' + r.assetId + ' (' + parsed.precision + ')');
                 const day = r.when.slice(0, 10).replace(/:/g, '-');
