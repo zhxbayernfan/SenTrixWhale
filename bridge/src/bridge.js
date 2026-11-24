@@ -454,7 +454,7 @@ async function shwSearch(query) {
         }));
         for (const it of items) {
             const ppl = peopleOf(it.file);
-            if (ppl) it.people = ppl;
+            if (ppl) it.people = ppl.map(personLabel);
         }
         if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
         // 带时间窗时再跑一次纯语义检索：用户可能记错时间，而时间窗里恰好有别的照片，
@@ -871,6 +871,14 @@ const REL_WORDS = [
 ];
 const relOf = (word) => (REL_WORDS.find(([, ws]) => ws.includes(word)) || [null])[0];
 const familyMembers = () => ((cfg.family && cfg.family.members) || []).map((m) => ({ ...m, qq: String(m.qq) }));
+// 人物名 → "名字（关系）"。关系以 config.family 为准；表里没有的原样返回。
+// 以后接 SHW 的人物页（family-graph 的 family_role）时，只需要把这里的数据源换掉。
+function personLabel(name) {
+    const n = String(name || '').trim();
+    if (!n) return n;
+    const m = familyMembers().find((x) => x.name === n || (x.aliases || []).includes(n));
+    return m ? `${n}（${m.role}）` : n;
+}
 const memberByQq = (qq) => familyMembers().find((m) => m.qq === String(qq)) || null;
 const UP_ROLES = ['哥哥', '姐姐', '爸爸', '妈妈', '老公', '老婆'];
 // 关系大类：同类里说错了称呼（说"表妹"其实是"堂妹"）要纠正，别顺着他叫
