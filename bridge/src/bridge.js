@@ -505,8 +505,22 @@ async function shwSearch(query, who) {
         }));
         const _viewer = memberByQq(String(who || ''))?.name || '';
         for (const it of items) {
-            const ppl = peopleOf(it.file);
-            if (ppl) it.people = ppl.map((p) => personLabel(p, _viewer));
+            let ppl = null;
+            // 先读 SHW 的人脸（自动聚类、全量覆盖），没有再回落人工标注表。
+            // SHW 只返回"已绑到 person 实体"的脸，没合并的簇不会出现。
+            if (it.id) {
+                try {
+                    const pr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(it.id) + '/people',
+                        { signal: AbortSignal.timeout(4000) });
+                    if (pr.ok) {
+                        const pj = await pr.json();
+                        const names = (pj.items || []).map((x) => String(x.name || '').trim()).filter(Boolean);
+                        if (names.length) ppl = names;
+                    }
+                } catch (e) { /* 接口不可用就用标注表 */ }
+            }
+            if (!ppl) ppl = peopleOf(it.file);
+            if (ppl && ppl.length) it.people = ppl.map((p) => personLabel(p, _viewer));
         }
         if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
         // 带时间窗时再跑一次纯语义检索：用户可能记错时间，而时间窗里恰好有别的照片，
