@@ -520,7 +520,10 @@ async function shwSearch(query, who) {
                 } catch (e) { /* 接口不可用就用标注表 */ }
             }
             if (!ppl) ppl = peopleOf(it.file);
-            if (ppl && ppl.length) it.people = ppl.map((p) => personLabel(p, _viewer));
+            if (ppl && ppl.length) {
+                ppl = [...ppl].sort((a, b) => (a === _viewer ? -1 : 0) - (b === _viewer ? -1 : 0));
+                it.people = ppl.map((p) => personLabel(p, _viewer));
+            }
         }
         if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
         // 带时间窗时再跑一次纯语义检索：用户可能记错时间，而时间窗里恰好有别的照片，
