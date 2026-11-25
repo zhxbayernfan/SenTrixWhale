@@ -521,8 +521,11 @@ async function shwSearch(query, who) {
             }
             if (!ppl) ppl = peopleOf(it.file);
             if (ppl && ppl.length) {
-                ppl = [...ppl].sort((a, b) => (a === _viewer ? -1 : 0) - (b === _viewer ? -1 : 0));
+                ppl = [...new Set(ppl)].sort((a, b) => (a === _viewer ? -1 : 0) - (b === _viewer ? -1 : 0));
                 it.people = ppl.map((p) => personLabel(p, _viewer));
+                // 提问者不在照片里时写明白，否则模型会把自己代进画面
+                // （1125 实测：zyn 问深圳那张，答成"你和你堂哥一起合影"）。
+                if (_viewer && !ppl.includes(_viewer)) it.peopleAbsent = true;
             }
         }
         if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
@@ -666,7 +669,7 @@ async function think(userText, who) {
         const _brief = (t) => { const v = String(t || ''); return v.slice(0, 46) + (v.length > 46 ? '…' : ''); };
         const descs = (hits.items || []).filter(x => x && x.desc)
             .map(x => !_briefOnly
-                ? `- ${String(x.time || '').slice(0, 10)}\n  ${x.people ? '画面里的人：' + x.people.join('、') + '\n  ' : ''}相册（地理位置）：${x.scope || '（没记）'}\n  画面里的地点：${x.place || '（没记）'}\n  画面：${x.desc}${x.objects ? '\n  元素：' + x.objects : ''}`
+                ? `- ${String(x.time || '').slice(0, 10)}\n  ${x.people ? '画面里的人：' + x.people.join('、') + (x.peopleAbsent ? '（照片里没有你）' : '') + '\n  ' : ''}相册（地理位置）：${x.scope || '（没记）'}\n  画面里的地点：${x.place || '（没记）'}\n  画面：${x.desc}${x.objects ? '\n  元素：' + x.objects : ''}`
                 : `- ${String(x.time || '').slice(0, 10)}｜${_brief(x.desc)}${x.people ? '（' + x.people.join('、') + '）' : ''}`).join('\n');
         const album = hits.scope ? `，都在《${hits.scope}》这本相册里` : '';
         // 用户说"这几张/这三张/哪张是"时，指代的是刚才聊过的那几张，不是这次检索到的
@@ -781,8 +784,8 @@ async function think(userText, who) {
         + '\n· 照片里如果是正在说话的人本人，说"你"，不要用名字；如果是她的伴侣，说"你男朋友/你老公"，不要用"妹夫"这种第三人称。'
         + (_meRole
             ? `\n· 他自己是家里的${_meRole}。问"我是谁"→"你是${_whoName}，家里的${_meRole}"；问"我X是谁"按上面的关系答。`
-              + `\n· 只有问的关系和自己同一类（哥问哥、妹问妹）才纠正"你说笑了，你已经是家里的${_meRole}了"；`
-              + `问别的亲属（妹问哥、哥问妹）正常答，不要套这句。`
+              + `\n· 问的亲属在【身份速查】名单里对得上（妹问"我哥"→堂哥 zhx）就正常答；`
+              + `名单里没有（堂妹问"我弟"）才说"你说笑了，家里没有弟弟"。`
             : '\n· 这位不是家里人，是朋友。别把家里的关系套到他身上。')
     if (_lastPhotoHint) sys = sys + '\n\n' + _lastPhotoHint;
     const _idHint = identityHint(userText, who);
