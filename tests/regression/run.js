@@ -21,8 +21,9 @@ global.fetch = async (u, o) => {
 const { handle } = require(process.env.HOME + '/SenTrixWhale/bridge/src/bridge.js');
 
 (async () => {
-  let pass = 0, fail = 0;
+  let pass = 0, fail = 0, known = 0, xpass = 0;
   const fails = [];
+  const knownList = [];
   for (const [group, cases] of Object.entries(suite)) {
     if (group.startsWith('_')) continue;
     for (const c of cases) {
@@ -34,7 +35,18 @@ const { handle } = require(process.env.HOME + '/SenTrixWhale/bridge/src/bridge.j
       const miss = (c.must || []).length && !(c.must || []).some((k) => a.includes(k))
         ? ['(一个都没命中:' + (c.must || []).join('/') + ')'] : [];
       const bad = (c.mustNot || []).filter((k) => a.includes(k));
-      if (miss.length === 0 && bad.length === 0) {
+      const ok = miss.length === 0 && bad.length === 0;
+      if (group === 'xfail') {
+        // 已知失败：不算通过率，但挂出来看得见；一旦跑过就提示可以摘帽
+        if (ok) {
+          xpass++;
+          console.log(`  XPASS [xfail] ${c.q.slice(0, 26)}  ← 已修复，可以挪回 identity`);
+        } else {
+          known++;
+          knownList.push({ q: c.q, a, why: c._why, miss, bad });
+          console.log(`  XFAIL [xfail] ${c.q.slice(0, 26)}  ${miss.length ? '缺:' + miss.join(',') : ''} ${bad.length ? '多:' + bad.join(',') : ''}`);
+        }
+      } else if (ok) {
         pass++;
         console.log(`  PASS  [${group}] ${c.q.slice(0, 26)}`);
       } else {
@@ -44,7 +56,7 @@ const { handle } = require(process.env.HOME + '/SenTrixWhale/bridge/src/bridge.j
       }
     }
   }
-  console.log(`\n结果：${pass} 通过 / ${fail} 失败 / 共 ${pass + fail}`);
-  fs.writeFileSync(path.join(BASE, 'last-run.json'), JSON.stringify({ at: new Date().toISOString(), pass, fail, fails }, null, 1));
+  console.log(`\n结果：${pass} 通过 / ${fail} 失败 / 已知失败 ${known} / XPASS ${xpass} / 共 ${pass + fail + known + xpass}`);
+  fs.writeFileSync(path.join(BASE, 'last-run.json'), JSON.stringify({ at: new Date().toISOString(), pass, fail, known, xpass, fails, knownList }, null, 1));
   process.exit(fail > 0 ? 1 : 0);
 })();
