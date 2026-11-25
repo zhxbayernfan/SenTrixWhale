@@ -560,7 +560,7 @@ async function shwSearch(query, who) {
             }));
             log('[SHW] 另补 ' + altItems.length + ' 条（时间窗外的候选）');
         }
-        return { count: items.length, total: _filteredAll.length, items, events, scope, timeMiss, askedTime: tr ? tr.label : '', altItems };
+        return { count: items.length, total: _filteredAll.length, files: _filteredAll.map((x) => ((x.asset || {}).file_name) || '').filter(Boolean), items, events, scope, timeMiss, askedTime: tr ? tr.label : '', altItems };
     } catch (e) { log('[SHW] 检索失败: ' + e.message); return null; }
 }
 
@@ -780,8 +780,9 @@ async function think(userText, who) {
         + '\n· 证据里写「路人N」的是不认识的人：不提关系、不编故事，问是谁就说认不出。'
         + '\n· 照片里如果是正在说话的人本人，说"你"，不要用名字；如果是她的伴侣，说"你男朋友/你老公"，不要用"妹夫"这种第三人称。'
         + (_meRole
-            ? `\n· 他自己是家里的${_meRole}。问"我是谁"→"你是${_whoName}，家里的${_meRole}"；问"我X是谁"按上面的关系答；`
-              + `他没有那个关系（比如哥哥问"我哥"）→"你说笑了，你已经是家里的${_meRole}了"。`
+            ? `\n· 他自己是家里的${_meRole}。问"我是谁"→"你是${_whoName}，家里的${_meRole}"；问"我X是谁"按上面的关系答。`
+              + `\n· 只有问的关系和自己同一类（哥问哥、妹问妹）才纠正"你说笑了，你已经是家里的${_meRole}了"；`
+              + `问别的亲属（妹问哥、哥问妹）正常答，不要套这句。`
             : '\n· 这位不是家里人，是朋友。别把家里的关系套到他身上。')
     if (_lastPhotoHint) sys = sys + '\n\n' + _lastPhotoHint;
     const _idHint = identityHint(userText, who);
@@ -1024,6 +1025,10 @@ function identityAsk(text, who) {
         const word = m[1];
         const hitSelf = (x) => x.role === word || (x.aliases || []).includes(word);
         if (!me) return '这个我不知道，我是帮你管照片的，家里的事你比我清楚。';
+        // 先找"别人"：zyn 问"我哥"时，家里有堂哥 zhx，就该答"你堂哥是 zhx"，
+        // 不能因为"堂妹"和"哥"不属同一类就判成"你没有哥"（1125 实测）。
+        const targetFirst = members.find((x) => x.qq !== me.qq && hitSelf(x));
+        if (targetFirst) return `你的${targetFirst.role}是${targetFirst.name}，QQ号${targetFirst.qq}那位。`;
         // 他和这个词同属一大类也算"在说自己"（堂妹说"表姐"），要纠正称呼
         if (hitSelf(me) || classOf(me.role) === classOf(word)) {
             const up = UP_ROLES.includes(me.role) || /哥|姐|爸|妈/.test(me.role);
@@ -1337,7 +1342,15 @@ async function _handleInner(userText, senderId, dest, imgs) {
         } catch (e) { /* 解析失败按无条件处理 */ }
         if (_tr || _scope) {
             const hits = await shwSearch(userText, senderId);
-            const n = hits ? (hits.total ?? hits.count ?? 0) : 0;
+            let n = hits ? (hits.total ?? hits.count ?? 0) : 0;
+            // "我拍了几张"要按本人过滤：命中集合里凡是有标注的，只数含本人的那些。
+            // 没有标注的照片判断不了，就不参与过滤（宁可多数，也不把人拍的说成没拍）。
+            const _meName = memberByQq(String(senderId))?.name;
+            if (_meName && hits && Array.isArray(hits.files)) {
+                const labeled = hits.files.filter((f) => peopleOf(f));
+                const mine = labeled.filter((f) => (peopleOf(f) || []).includes(_meName));
+                if (labeled.length) n = mine.length;
+            }
             const _where = _scope ? `《${_scope}》` : '';
             const _when = _tr ? _tr.label : '';
             const reply = n > 0 ? `${_when}${_where}一共 ${n} 张` : `${_when}${_where}这个我没存到`;
