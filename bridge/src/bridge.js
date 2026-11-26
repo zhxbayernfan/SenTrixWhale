@@ -701,15 +701,18 @@ async function think(userText, who) {
         // 图和答案一起漂（1126 实测：同一张海报连问三遍，发出三张不同的图）。
         // 必须放在本人优先排序之后，否则补回队首会被排序挤走。
         if (hits && Array.isArray(hits.items) && hits.items.length) {
-            const _ask = /这张|那张|上面|除了|还有|它|这照片|那照片/.test(userText);
+            // 强追问（除了/上面/还/它）一定是接着同一张说，不用看日期；
+            // 弱指代（这张/那张）可能是新照片，要求同一天才沿用。
+            const _strongAsk = /除了|上面|还有|它|这照片里|那照片里|这张上|那张上/.test(userText);
+            const _weakAsk = /这张|那张|这照片|那照片/.test(userText);
             const _switch = /另一张|别的|另外|换一张|不同的/.test(userText);
             const _tp = _topicPhoto.get(String(who));
             const _day = (x) => String((x && x.time) || '').slice(0, 10);
             const _sameDay = _tp && hits.items[0] && (_day(hits.items[0]) === _day(_tp));
-            // 只有"看起来还是同一张"（同一天/同一张）才沿用；用户明确换了照片就别劫持
             const _keep = _tp && (_sameDay || (hits.items[0] && hits.items[0].id === _tp.id));
             const _recent = _tp && (_t - (_tp.turn || 0) <= 3) && _keep;
-            if (!_switch && (_ask || _recent) && _keep && _tp && _tp.id) {
+            const _carry = _tp && (_strongAsk || (_weakAsk && _keep) || _recent);
+            if (!_switch && _carry && _tp && _tp.id) {
                 const _i = hits.items.findIndex((x) => x.id === _tp.id);
                 if (_i > 0) {
                     const [x] = hits.items.splice(_i, 1);
