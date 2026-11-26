@@ -525,7 +525,7 @@ async function shwSearch(query, who) {
         log(`[SHW] q="${query}"${tr ? ' 区间=' + tr.from + '~' + tr.to : ''} 原始${(j.items || []).length}条 去重/筛选后${items.length}条`);
         // [FIX-12] 检索只给文件名和时间，她没法"聊照片"——命中的前 3 条补取画面描述。
         // 描述在 /assets/{id}/memories 里（search 的 asset 结构不含 caption）。
-        await Promise.all(items.slice(0, 12).map(async (it) => {
+        await Promise.all(items.slice(0, 20).map(async (it) => {
             if (!it.id) return;
             try {
                 const mr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(it.id) + '/memories',
@@ -885,7 +885,9 @@ async function think(userText, who) {
         + `\n\n【身份速查】现在是 ${_whoName}（${who}）在跟你说话。`
         + (_famLine ? `\n· 家里的人：${_famLine}。` : '')
         + '\n· 证据里写「路人N」的是不认识的人：不提关系、不编故事，问是谁就说认不出。'
-        + '\n· 照片里如果是正在说话的人本人，说"你"，不要用名字；如果是她的伴侣，说"你男朋友/你老公"，不要用"妹夫"这种第三人称。'
+        + '\n· 照片里如果是正在说话的人本人，说"你"，不要用名字。'
+        + '\n· "你男朋友/你老公"只能对那个人的伴侣说：zyn 问就是"你男朋友"，别人（比如她堂哥）问就是"zyn 的男朋友/妹夫"。'
+        + '\n  别把"你"乱安——对堂哥说"你男朋友"，等于说他有男朋友。'
         + (_meRole
             ? `\n· 他自己是家里的${_meRole}。问"我是谁"→"你是${_whoName}，家里的${_meRole}"；问"我X是谁"按上面的关系答。`
               + `\n· 问的亲属在【身份速查】名单里对得上（妹问"我哥"→堂哥 zhx）就正常答；`
