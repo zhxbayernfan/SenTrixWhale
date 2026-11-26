@@ -1955,7 +1955,10 @@ async function replyTo(dest, text, userInput) {
     // [发图] 用户要照片 → 从库里取那张的预览图发过去（不是表情包）
     // [发图] 嘴上说不能发（拒绝要原图）就别附预览图，否则自相矛盾
     const _refuse = /没法|不能发|发不了|没有原图|不方便|不能给|拿不到原图/.test(text);
-    if (_pendingPhotoSend && !_refuse) {
+    // 用户明确要"原图/原始文件"时不发预览图——预览不是原图，发了等于答应了又没做到，
+    // 而且会被当成"管理员要就给"的口子（1126 实测）
+    const _wantOriginal = /原图|原始文件|原文件|源文件/.test(String(userInput || ''));
+    if (_pendingPhotoSend && !_refuse && !_wantOriginal) {
         try {
             const pr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(_pendingPhotoSend) + '/preview',
                 { signal: AbortSignal.timeout(15000) });
