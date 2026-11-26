@@ -1426,7 +1426,7 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 // 只数有这个人标注的照片；一条标注都没有判断不了，就按检索总数
                 const labeled = (hits && Array.isArray(hits.files) ? hits.files : []).filter((f) => peopleOf(f));
                 if (labeled.length) n = labeled.filter((f) => (peopleOf(f) || []).includes(_target)).length;
-            } else if (_me && hits && Array.isArray(hits.files) && /我拍的|拍的我|我的照片|有我的/.test(userText)) {
+            } else if (_me && hits && Array.isArray(hits.files) && /我拍的|我拍了|拍的我|我的照片|有我的/.test(userText)) {
                 // 只有明确说"我拍的/有我的"才按本人过滤；
                 // 问"某天一共有几张"就是数全部（1126 实测：25年4月30日库里 5 张，
                 // 被这条无条件过滤成"本人 3 张"）。
