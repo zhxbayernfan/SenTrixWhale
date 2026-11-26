@@ -47,6 +47,7 @@ const missingOf = (c, assets) => {
 
 (async () => {
   let pass = 0, fail = 0, known = 0, xpass = 0, skip = 0;
+  const results = [];
   const assets = await loadAssets();
   if (!assets) console.log('  (SHW 未响应，跳过资产检查)');
   const fails = [];
@@ -60,6 +61,7 @@ const missingOf = (c, assets) => {
       if (_lack) {
         skip++;
         console.log(`  SKIP  [${group}] ${c.q.slice(0, 26)}  (缺 ${_lack})`);
+        results.push({ group, who: c.who, q: c.q, a: '', ok: false, skip: true, lack: _lack });
         continue;
       }
       const who = QQ[c.who] || c.who;
@@ -73,6 +75,7 @@ const missingOf = (c, assets) => {
       const ok = miss.length === 0 && bad.length === 0;
       if (group === 'xfail') {
         // 已知失败：不算通过率，但挂出来看得见；一旦跑过就提示可以摘帽
+        results.push({ group, who: c.who, q: c.q, a, ok, xfail: true });
         if (ok) {
           xpass++;
           console.log(`  XPASS [xfail] ${c.q.slice(0, 26)}  ← 已修复，可以挪回 identity`);
@@ -82,9 +85,11 @@ const missingOf = (c, assets) => {
           console.log(`  XFAIL [xfail] ${c.q.slice(0, 26)}  ${miss.length ? '缺:' + miss.join(',') : ''} ${bad.length ? '多:' + bad.join(',') : ''}`);
         }
       } else if (ok) {
+        results.push({ group, who: c.who, q: c.q, a, ok: true });
         pass++;
         console.log(`  PASS  [${group}] ${c.q.slice(0, 26)}`);
       } else {
+        results.push({ group, who: c.who, q: c.q, a, ok: false, miss, bad });
         fail++;
         fails.push({ group, q: c.q, a, miss, bad });
         console.log(`  FAIL  [${group}] ${c.q.slice(0, 26)}  ${miss.length ? '缺:' + miss.join(',') : ''} ${bad.length ? '多:' + bad.join(',') : ''}`);
@@ -92,6 +97,6 @@ const missingOf = (c, assets) => {
     }
   }
   console.log(`\n结果：${pass} 通过 / ${fail} 失败 / 已知失败 ${known} / XPASS ${xpass} / 跳过 ${skip} / 共 ${pass + fail + known + xpass + skip}`);
-  fs.writeFileSync(path.join(BASE, 'last-run.json'), JSON.stringify({ at: new Date().toISOString(), pass, fail, known, xpass, skip, fails, knownList }, null, 1));
+  fs.writeFileSync(path.join(BASE, 'last-run.json'), JSON.stringify({ at: new Date().toISOString(), pass, fail, known, xpass, skip, fails, knownList, results }, null, 1));
   process.exit(fail > 0 ? 1 : 0);
 })();
