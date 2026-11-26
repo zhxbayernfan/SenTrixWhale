@@ -224,6 +224,12 @@ function timeRangeOf(q) {  // [FIX-7] 时间词 -> SHW 的 time_range + 本地�
     }
     if (/去年/.test(q)) return { label: `${y - 1}年`, from: `${y - 1}-01-01`, to: `${y - 1}-12-31` };
     if (/今年/.test(q)) return { label: `${y}年`, from: `${y}-01-01`, to: `${y}-12-31` };
+    if (/这个月|本月|当月/.test(q)) return mk(y, m);
+    if (/这周|本周|这个星期|这星期/.test(q)) {
+        const t = new Date();
+        const mon = new Date(t.getTime() - ((t.getDay() + 6) % 7) * 864e5);
+        return { label: '本周', from: local(mon), to: local(t) };
+    }
     if (/上个月/.test(q)) return mk(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1);
     if (/上周|上星期|这几天|最近/.test(q)) { const t = new Date(Date.now() - 7 * 864e5); return mk(t.getFullYear(), t.getMonth() + 1); }
     const ym = q.match(/(\d{4})年(\d{1,2})?月?/);
@@ -1491,15 +1497,13 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 reply = absentReply(_rel0, senderId);
             } else {
                 const _who0 = _rel0 && _rel0.member ? _rel0.member.name
-                    : (_me0 && /有我的|我的照片|我在里面|我自己的照片/.test(userText) ? _me0.name : '');
+                    : (_me0 && /有我的|我的照片|我在里面|我自己的照片|我拍的|我拍了|我拍过/.test(userText) ? _me0.name : '');
                 if (_who0) {
                     const nn = countLabeled(_who0);
                     const _lbl = _me0 && _who0 === _me0.name ? '你' : _who0;
                     reply = nn > 0
                         ? `记忆库里现在有 ${count.total} 张照片，我认得出有${_lbl}的是 ${nn} 张`
                         : `记忆库里现在有 ${count.total} 张照片，不过还没认出哪张里有${_lbl}`;
-                } else if (_me0 && /我拍的|我拍了|我拍过/.test(userText)) {
-                    reply = `这个我还真看不出来哪张是你拍的，库里一共 ${count.total} 张`;
                 } else {
                     reply = '记忆库里现在有' + count.total + '张照片呢～'; // [FIX-2]
                 }
