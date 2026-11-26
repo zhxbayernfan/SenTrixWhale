@@ -747,10 +747,12 @@ async function think(userText, who) {
         const _refBlock = _refLines
             ? `\n【用户说的"这几张"就是下面这几张，不是这次检索到的】\n${_refLines}\n回答时按这几张比，别用别的照片。\n`
             : '';
+        const _altT = String((hits.altItems[0] || {}).time || '').slice(0, 7);
+        const _altLabel = _altT ? `${_altT.slice(0, 4)} 年 ${Number(_altT.slice(5, 7))} 月` : '';
         const _altLines = (hits.altItems || []).filter((x) => x.desc)
             .map((x) => `- ${String(x.time || '').slice(0, 10)}：${x.desc}`).join('\n');
         const _altBlock = _altLines
-            ? `\n【时间对不上但内容可能对】用户说的是「${hits.askedTime}」，下面这些不在那个时间，但可能是他要找的：\n${_altLines}\n如果对得上，先确认"你说的是${String((hits.altItems[0] || {}).time || '').slice(0, 7)}那张吗"，再答。\n`
+            ? `\n【时间对不上但内容可能对】用户说的是「${hits.askedTime}」，下面这些不在那个时间，但可能是他要找的：\n${_altLines}\n如果对得上，先确认"你说的是${_altLabel || '那张'}吗"——时间照抄这里，别自己改年份，再答。\n`
             : '';
         const _timeWarn = (hits.timeMiss && hits.askedTime)
             ? `\n【时间对不上】用户说的是「${hits.askedTime}」，但库里没有那个时间的照片；上面这些是时间最接近的。说话时先确认一句"你说的是XXXX那张吗"，把正确的时间讲出来，再答内容。\n`
@@ -1106,10 +1108,13 @@ function identityAsk(text, who) {
         // 同类但叫错了（"我表妹"→家里只有堂妹）：纠正，别顺着说
         const cls = classOf(word);
         if (cls) {
-            const near = members.find((x) => x.qq !== me.qq && classOf(x.role) === cls);
+            // 长幼方向不同的不能当"叫错称呼"：堂妹问"弟"，不能答"应该是堂哥吧"
+            const junior = /弟|妹/.test(word);
+            const near = members.find((x) => x.qq !== me.qq && classOf(x.role) === cls
+                && (/弟|妹/.test(x.role) === junior));
             if (near) return `你说的应该是${near.role}吧？${near.name}是你${near.role}，不是${word}。`;
         }
-        return null;
+        return absentReply({ type: 'absent', me, word }, who);
     }
 
     // 「X 是谁」

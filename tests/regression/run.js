@@ -20,8 +20,35 @@ global.fetch = async (u, o) => {
 };
 const { handle, _resetHistory } = require(process.env.HOME + '/SenTrixWhale/bridge/src/bridge.js');
 
+// [资产存在性] 照片会被删/重传，题库里指名道姓的题不该因此变红：
+// 跑之前先拉一次 SHW 资产清单，缺图的题标 SKIP（不算通过也不算失败）。
+async function loadAssets() {
+  try {
+    const r = await realFetch('http://127.0.0.1:8191/api/v1/assets?limit=1000', { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const files = new Set(), days = new Set();
+    for (const it of (j.items || [])) {
+      const a = it.asset || it;
+      if (a.file_name) files.add(a.file_name);
+      const d = String(a.captured_at || '').slice(0, 10);
+      if (d) days.add(d);
+    }
+    return { files, days };
+  } catch (e) { return null; }
+}
+const missingOf = (c, assets) => {
+  if (!assets) return '';
+  const lack = [];
+  for (const f of (c.need || [])) if (!assets.files.has(f)) lack.push(f);
+  if (c.needDay && !assets.days.has(c.needDay)) lack.push(c.needDay);
+  return lack.join(',');
+};
+
 (async () => {
-  let pass = 0, fail = 0, known = 0, xpass = 0;
+  let pass = 0, fail = 0, known = 0, xpass = 0, skip = 0;
+  const assets = await loadAssets();
+  if (!assets) console.log('  (SHW 未响应，跳过资产检查)');
   const fails = [];
   const knownList = [];
   for (const [group, cases] of Object.entries(suite)) {
@@ -29,6 +56,12 @@ const { handle, _resetHistory } = require(process.env.HOME + '/SenTrixWhale/brid
     // 组内连续（指代题需要前文），组间重置：避免 28 题累积把模型带跑偏
     _resetHistory();
     for (const c of cases) {
+      const _lack = missingOf(c, assets);
+      if (_lack) {
+        skip++;
+        console.log(`  SKIP  [${group}] ${c.q.slice(0, 26)}  (缺 ${_lack})`);
+        continue;
+      }
       const who = QQ[c.who] || c.who;
       sent.length = 0;
       try { await handle(c.q, who, { kind: 'private', id: who }, []); } catch (e) { sent.push('[异常]' + e.message); }
@@ -58,7 +91,7 @@ const { handle, _resetHistory } = require(process.env.HOME + '/SenTrixWhale/brid
       }
     }
   }
-  console.log(`\n结果：${pass} 通过 / ${fail} 失败 / 已知失败 ${known} / XPASS ${xpass} / 共 ${pass + fail + known + xpass}`);
-  fs.writeFileSync(path.join(BASE, 'last-run.json'), JSON.stringify({ at: new Date().toISOString(), pass, fail, known, xpass, fails, knownList }, null, 1));
+  console.log(`\n结果：${pass} 通过 / ${fail} 失败 / 已知失败 ${known} / XPASS ${xpass} / 跳过 ${skip} / 共 ${pass + fail + known + xpass + skip}`);
+  fs.writeFileSync(path.join(BASE, 'last-run.json'), JSON.stringify({ at: new Date().toISOString(), pass, fail, known, xpass, skip, fails, knownList }, null, 1));
   process.exit(fail > 0 ? 1 : 0);
 })();
