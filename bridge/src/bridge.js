@@ -1100,7 +1100,8 @@ function identityAsk(text, who) {
         if (targetFirst) return `你的${targetFirst.role}是${targetFirst.name}，QQ号${targetFirst.qq}那位。`;
         // 他和这个词同属一大类也算"在说自己"（堂妹说"表姐"），要纠正称呼
         if (hitSelf(me) || classOf(me.role) === classOf(word)) {
-            const up = UP_ROLES.includes(me.role) || /哥|姐|爸|妈/.test(me.role);
+            // 上下看的是"问的那个称呼"，不是自己是什么：堂妹问"表姐"，不能答"没有更往下的"
+            const up = UP_ROLES.includes(word) || /哥|姐|爸|妈/.test(word);
             return `你说笑了，你已经是家里的${me.role}了，没有更往${up ? '上' : '下'}的${me.role}了。`;
         }
         const target = members.find((x) => x.qq !== me.qq && hitSelf(x));
