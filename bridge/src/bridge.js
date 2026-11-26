@@ -585,7 +585,7 @@ async function shwSearch(query, who) {
             let n = 0;
             for (const k of _kw) {
                 const forms = SYN[k] || [k];
-                if (forms.some((f) => s.includes(f))) n += GENERIC.includes(k) ? 0.5 : 1;
+                if (forms.some((f) => s.includes(f))) n += GENERIC.includes(k) ? 0.5 : ((SYN[k] ? 2 : 1));
             }
             return n;
         };
@@ -680,7 +680,11 @@ async function think(userText, who) {
     userText = filterSurrogates(userText);
     log('[think] 今日累计调用: ' + daily.calls);
     // SHW检索优先(记忆大坝): 检索到的证据作为回答依据; 未启用/未命中则落回本地记忆
+    // [轮次] 每问一轮 +1，话题照片按轮次判新
+    const _t = (_turnSeq.get(String(who)) || 0) + 1;
+    _turnSeq.set(String(who), _t);
     const hits = await shwSearch(userText, who);
+    _lastHitsForSend = hits;
     // [本人优先] 谁问就先给谁的照片：zyn 问"4 月底的照片"，先给她和妹夫那张，
     // 而不是同一天哥哥在深圳拍的那张。
     try {
@@ -698,8 +702,14 @@ async function think(userText, who) {
         // 必须放在本人优先排序之后，否则补回队首会被排序挤走。
         if (hits && Array.isArray(hits.items) && hits.items.length) {
             const _ask = /这张|那张|上面|除了|还有|它|这照片|那照片/.test(userText);
+            const _switch = /另一张|别的|另外|换一张|不同的/.test(userText);
             const _tp = _topicPhoto.get(String(who));
-            if (_ask && _tp && _tp.id) {
+            const _day = (x) => String((x && x.time) || '').slice(0, 10);
+            const _sameDay = _tp && hits.items[0] && (_day(hits.items[0]) === _day(_tp));
+            // 只有"看起来还是同一张"（同一天/同一张）才沿用；用户明确换了照片就别劫持
+            const _keep = _tp && (_sameDay || (hits.items[0] && hits.items[0].id === _tp.id));
+            const _recent = _tp && (_t - (_tp.turn || 0) <= 3) && _keep;
+            if (!_switch && (_ask || _recent) && _keep && _tp && _tp.id) {
                 const _i = hits.items.findIndex((x) => x.id === _tp.id);
                 if (_i > 0) {
                     const [x] = hits.items.splice(_i, 1);
@@ -710,7 +720,7 @@ async function think(userText, who) {
                     log('[话题] 补回上一轮: ' + _tp.file);
                 }
             }
-            if (hits.items[0] && hits.items[0].id) _topicPhoto.set(String(who), hits.items[0]);
+            // 话题照片只在真正发出去时更新（见 handle），这里只读不写
         }
     } catch (e) { /* 排序失败不影响回答 */ }
     // [发图] 用户在要照片（"给我一张""发我一张"），不是问照片里有什么
@@ -733,22 +743,6 @@ async function think(userText, who) {
         } else if (_wantPhoto && _first && _first.id) {
             _pendingPhotoSend = _first.id;
             log('[发图] 准备附带资产图: ' + _first.id);
-        } else {
-            // [顺带发图] 聊到照片就把那张带出来，用户不用自己去翻相册。
-            // 同一张 10 条消息内只发一次，免得连问几句就刷屏（1126 定的口径）。
-            const _aboutPhoto = /那张|这张|照片|图|合影|海报|体育场|草坪|展厅|电梯/.test(userText);
-            const _t = (_turnSeq.get(String(who)) || 0) + 1;
-            _turnSeq.set(String(who), _t);
-            const _last = _sentPhoto.get(String(who));
-            const _dup = _last && _first && _last.id === _first.id && (_t - _last.turn) <= 5;
-            if (_aboutPhoto && _first && _first.id && !_dup) {
-                _pendingPhotoSend = _first.id;
-                log('[发图] 顺带带出: ' + _first.id + ' 第' + _t + '轮');
-            }
-        }
-        if (_pendingPhotoSend) {
-            const _t2 = _turnSeq.get(String(who)) || 0;
-            _sentPhoto.set(String(who), { id: _pendingPhotoSend, turn: _t2 });
         }
     } catch (e) { /* 不影响正常回答 */ }
 
@@ -1445,6 +1439,29 @@ let _pendingPhotoSend = null;
 const _sentPhoto = new Map();
 const _turnSeq = new Map();
 const _topicPhoto = new Map();   // 谁这一轮在聊哪张（追问式 query 沿用上一轮那张）
+let _lastHitsForSend = null;     // 本轮检索结果，供"按回答挑图"用
+
+// [按回答挑图] 发 items[0] 是错的：模型经常从第 2、3 条候选里挑一条来答，
+// 图和答案就对不上（1126 实测：答的是 2023 广州词云，发的却是柯南海报）。
+// 用回答里出现的年份、以及对候选描述的词命中来反选。
+function pickPhotoByReply(reply, hits) {
+    const items = (hits && hits.items) || [];
+    if (!items.length) return null;
+    const years = String(reply || '').match(/20\d{2}/g) || [];
+    if (years.length) {
+        const byYear = items.find((x) => years.some((y) => String(x.time || '').startsWith(y)));
+        if (byYear) return byYear;
+    }
+    const kws = keyTerms(String(reply || '')).slice(0, 40);
+    if (!kws.length) return items[0];
+    let best = items[0], bestN = -1;
+    for (const it of items) {
+        const t = String(it.desc || '') + ' ' + String(it.file || '');
+        const n = kws.filter((k) => t.includes(k)).length;
+        if (n > bestN) { bestN = n; best = it; }
+    }
+    return best;
+}
 // [指代] 最近一次检索真正聊到的几张照片。用户说"这几张/这三张"时，
 // 每次重新检索会搜到别的照片（1120 实测：问"这三张里最早的是哪张"，搜回来的是
 // 商场电梯和博物馆），所以得记住刚才聊的是哪几张。
@@ -1858,6 +1875,30 @@ async function _handleInner(userText, senderId, dest, imgs) {
     try {
         const reply = await think(userText, senderId);
         addHistory(senderId, userText, reply);
+        // [顺带发图] 聊到照片就把那张带出来；同一张 5 轮内只发一次。
+        // 挑哪张按回答内容反选（见 pickPhotoByReply），不是 items[0]。
+        if (!_pendingPhotoSend) {
+            const _aboutPhoto = /那张|这张|照片|图|合影|海报|体育场|草坪|展厅|电梯/.test(userText);
+            const _refuse = /没法|不能发|发不了|没有原图|不方便|不能给/.test(reply);
+            let _pick = _aboutPhoto && !_refuse ? pickPhotoByReply(reply, _lastHitsForSend) : null;
+            // 回答里没提年份 = 还在聊同一张，别按词命中挑到隔壁去
+            const _tp = _topicPhoto.get(String(senderId));
+            const _pt = _turnSeq.get(String(senderId)) || 0;
+            if (_pick && _tp && (_pt - (_tp.turn || 0) <= 3) && !/20\d{2}/.test(reply)) _pick = _tp;
+            if (_pick && _pick.id) {
+                const _t = _turnSeq.get(String(senderId)) || 0;
+                const _hist = (_sentPhoto.get(String(senderId)) || []).filter((x) => _t - x.turn <= 20);
+                const _dup = _hist.some((x) => x.id === _pick.id && (_t - x.turn) <= 5);
+                log('[发图挑选] pick=' + (_pick.id) + ' tp=' + (_tp && _tp.id) + ' t=' + _t + ' hist=' + JSON.stringify(_hist) + ' dup=' + !!_dup);
+                if (!_dup) {
+                    _pendingPhotoSend = _pick.id;
+                    _hist.push({ id: _pick.id, turn: _t });
+                    _sentPhoto.set(String(senderId), _hist);
+                    _topicPhoto.set(String(senderId), { id: _pick.id, file: _pick.file, time: _pick.time, turn: _t });
+                    log('[发图] 顺带带出: ' + _pick.file + ' 第' + _t + '轮');
+                }
+            }
+        }
         await replyTo(dest, reply, userText);
     } catch (e) {
         log('[错误] ' + e.message);
