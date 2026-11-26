@@ -137,6 +137,9 @@ function familySum(){try{const CL=path.join(ROOT,'state','chat_log_sentrix.jsonl
 // ---------- 对话历史(最近5轮) ----------
 const chatHistory = {};
 const MAX_HISTORY = 5;
+// [测试隔离] 回归集按"组"重置历史：组内保持连续对话（指代题要靠前文），
+// 组间清空，免得 28 题一路累积把 4B 的上下文稀释掉（1126 实测：连跑到照片组后半段
+// 开始出"收到。"这种退化答复）。
 function getHistory(who) {
     // [FIX-12] 原来直接返回空数组"避免混淆"，结果每轮都是失忆的：
     // 多聊几句就接不上，两个号更是分不清。按 QQ 号隔离 + 截断，才是正确做法。
@@ -578,6 +581,8 @@ const roleText = () => {
 // ---------- 工程鲸chatLog(调试工具,可随意清空) ----------
 const CL = path.join(ROOT, 'state', 'chat_log_sentrix.jsonl');
 const chatLog = (obj) => {
+    // 回归测试跑完不留痕：否则每次跑套件都往真实聊天记录里灌 28 条
+    if (process.env.STW_TEST === '1') return;
     const d = new Date(); const p2 = (x) => String(x).padStart(2, '0');
     const ordered = {
         event: obj.event,
@@ -1083,6 +1088,24 @@ function relativeQuery(text, who) {
     return { type: 'absent', me, word };
 }
 
+// 口吻照角色卡「你说笑了，你自己就是堂妹」：先轻纠一句，再说明名单里只有谁。
+function absentReply(rel, who) {
+    const others = familyMembers().filter((x) => x.qq !== String(who))
+        .map((x) => `${x.name}（${x.role}）`).join('、') || '家里人';
+    const w = ({ 哥: '哥哥', 弟: '弟弟', 姐: '姐姐', 妹: '妹妹' })[rel.word] || rel.word;
+    return rel.type === 'self'
+        ? `你说笑了，你自己就是家里的${rel.me.role}呀，没有别的${w}～`
+        : `你说笑了，我这儿只认识${others}，${w}还没加进聊天名单哦～`;
+}
+
+// 人工标注表里含这个人的照片数（SHW 人脸没绑成人物的簇不算，宁可少说）
+function countLabeled(name) {
+    try {
+        const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'people_map.json'), 'utf8'));
+        return Object.values(d).filter((v) => Array.isArray(v) && v.includes(name)).length;
+    } catch (e) { return 0; }
+}
+
 async function countPhotos() {
     try {
         const photoDir = path.join(ROOT, 'media', 'photos');
@@ -1378,13 +1401,7 @@ async function _handleInner(userText, senderId, dest, imgs) {
             // 顺着家庭结构说一句（1126 实测：堂妹问"我弟"，答"一共 3 张"，
             // 其实她是家里最小的妹妹，根本没有弟弟）。
             if (_rel && (_rel.type === 'absent' || _rel.type === 'self')) {
-                const _others = familyMembers().filter((x) => x.qq !== String(senderId))
-                    .map((x) => `${x.name}（${x.role}）`).join('、') || '家里人';
-                const _w = ({ 哥: '哥哥', 弟: '弟弟', 姐: '姐姐', 妹: '妹妹' })[_rel.word] || _rel.word;
-                // 口吻照角色卡：「你说笑了，你自己就是堂妹」——先轻纠一句，再接着答
-                const _reply = _rel.type === 'self'
-                    ? `你说笑了，你自己就是家里的${_rel.me.role}呀，没有别的${_w}～`
-                    : `你说笑了，我这儿只认识${_others}，${_w}还没加进聊天名单哦～`;
+                const _reply = absentReply(_rel, senderId);
                 chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: _reply });
                 await replyTo(dest, _reply, userText);
                 return;
@@ -1411,10 +1428,31 @@ async function _handleInner(userText, senderId, dest, imgs) {
         }
         const count = await countPhotos();
         if (count !== null) {
-            const reply = '记忆库里现在有' + count.total + '张照片呢～'; // [FIX-2]
-            // 记录chatLog
+            // [计数按人] 没有时间/地点条件时，问"有我的/我堂妹的"照样按人算；
+            // "我拍的"判断不了，照角色卡规矩直说看不出来，别编
+            // （1126 实测：问"我拍了几张"原来直接回全库 58 张）。
+            const _rel0 = relativeQuery(userText, senderId);
+            const _me0 = memberByQq(String(senderId));
+            let reply;
+            if (_rel0 && (_rel0.type === 'absent' || _rel0.type === 'self')) {
+                reply = absentReply(_rel0, senderId);
+            } else {
+                const _who0 = _rel0 && _rel0.member ? _rel0.member.name
+                    : (_me0 && /有我的|我的照片|我在里面|我自己的照片/.test(userText) ? _me0.name : '');
+                if (_who0) {
+                    const nn = countLabeled(_who0);
+                    const _lbl = _me0 && _who0 === _me0.name ? '你' : _who0;
+                    reply = nn > 0
+                        ? `记忆库里现在有 ${count.total} 张照片，我认得出有${_lbl}的是 ${nn} 张`
+                        : `记忆库里现在有 ${count.total} 张照片，不过还没认出哪张里有${_lbl}`;
+                } else if (_me0 && /我拍的|我拍了|我拍过/.test(userText)) {
+                    reply = `这个我还真看不出来哪张是你拍的，库里一共 ${count.total} 张`;
+                } else {
+                    reply = '记忆库里现在有' + count.total + '张照片呢～'; // [FIX-2]
+                }
+            }
             chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: reply });
-        await replyTo(dest, reply, userText);
+            await replyTo(dest, reply, userText);
             return;
         }
     }
@@ -1805,5 +1843,5 @@ if (!process.env.STW_NO_CONNECT) {
     log("[测试] STW_NO_CONNECT=1, 跳过 WS 连接");
 }
 // [测试用] 导出以便无 QQ 环境跑通链路
-module.exports = { handle, connect };
+module.exports = { handle, connect, _resetHistory: () => { for (const k in chatHistory) delete chatHistory[k]; } };
 

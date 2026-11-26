@@ -18,7 +18,7 @@ global.fetch = async (u, o) => {
   }
   return realFetch(u, o);
 };
-const { handle } = require(process.env.HOME + '/SenTrixWhale/bridge/src/bridge.js');
+const { handle, _resetHistory } = require(process.env.HOME + '/SenTrixWhale/bridge/src/bridge.js');
 
 (async () => {
   let pass = 0, fail = 0, known = 0, xpass = 0;
@@ -26,6 +26,8 @@ const { handle } = require(process.env.HOME + '/SenTrixWhale/bridge/src/bridge.j
   const knownList = [];
   for (const [group, cases] of Object.entries(suite)) {
     if (group.startsWith('_')) continue;
+    // 组内连续（指代题需要前文），组间重置：避免 28 题累积把模型带跑偏
+    _resetHistory();
     for (const c of cases) {
       const who = QQ[c.who] || c.who;
       sent.length = 0;
