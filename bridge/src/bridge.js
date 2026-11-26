@@ -335,6 +335,36 @@ async function eventsInRange(from, to, scope) {
     return out.slice(0, 3);
 }
 
+// [关键词] 把 query 切成实词：英文取 3 字以上，中文按 2-gram。
+// 没有分词器，2-gram 会有"云海"这种噪音，但算命中数排序够用。
+// 口语和 VLM 描述常对不上：用户叫"词云"，描述里写的是"文字云"；叫"合影"，描述写"合照"。
+// 这张表只收通用同义词（不是某张照片的别名），加词不影响别的检索。
+const SYN = {
+    词云: ['词云', '文字云', '标签云'],
+    生信: ['生信', '生物信息'],
+    合影: ['合影', '合照', '同框'],
+    合照: ['合影', '合照', '同框'],
+    自拍: ['自拍', '自拍照'],
+    猫咪: ['猫', '猫咪', '小猫'],
+    小狗: ['狗', '小狗', '犬'],
+};
+// 泛词命中只算半票："海报"这种词在几十张照片的描述里都有，不能拿它当证据
+const GENERIC = ['海报', '照片', '图片', '相片', '那个', '东西', '地方', '上面', '写着', '文字', '时间'];
+function keyTerms(q) {
+    const stop = ['那张', '这张', '照片', '图片', '相片', '一下', '多少', '几张', '什么',
+        '帮我', '看看', '给我', '说说', '介绍', '告诉我', '哪张'];
+    let t = String(q || '');
+    for (const w of stop) t = t.split(w).join(' ');
+    const terms = new Set();
+    for (const part of t.split(/[^\u4e00-\u9fa5A-Za-z0-9]+/)) {
+        if (!part) continue;
+        if (/^[A-Za-z0-9]+$/.test(part)) { if (part.length >= 3) terms.add(part); continue; }
+        if (part.length <= 3) { terms.add(part); continue; }
+        for (let i = 0; i + 2 <= part.length; i++) terms.add(part.slice(i, i + 2));
+    }
+    return [...terms];
+}
+
 async function shwSearch(query, who) {
     if (!cfg.shw || !cfg.shw.enabled) return null;  // 未启用: 走本地记忆
     try {
@@ -472,7 +502,7 @@ async function shwSearch(query, who) {
             }
             seen.add(a.file_name); return true;
         });
-        const items = _filteredAll.slice(0, 5).map(it => ({
+        const items = _filteredAll.slice(0, 12).map(it => ({
             id: it.asset.id,
             file: it.asset.file_name,
             time: it.asset.captured_at,
@@ -481,7 +511,7 @@ async function shwSearch(query, who) {
         log(`[SHW] q="${query}"${tr ? ' 区间=' + tr.from + '~' + tr.to : ''} 原始${(j.items || []).length}条 去重/筛选后${items.length}条`);
         // [FIX-12] 检索只给文件名和时间，她没法"聊照片"——命中的前 3 条补取画面描述。
         // 描述在 /assets/{id}/memories 里（search 的 asset 结构不含 caption）。
-        await Promise.all(items.slice(0, 3).map(async (it) => {
+        await Promise.all(items.slice(0, 12).map(async (it) => {
             if (!it.id) return;
             try {
                 const mr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(it.id) + '/memories',
@@ -532,6 +562,24 @@ async function shwSearch(query, who) {
             }
         }
         if (items.some((x) => x.desc)) log('[SHW] 补到画面描述 ' + items.filter((x) => x.desc).length + ' 条');
+        // [关键词重排] 短 query 里的泛词会把语义带偏："词云海报"搜出来第一条是柯南海报，
+        // 真正那张（描述里同时有"词云"和"海报"）排第 5，模型拿不到就回"帮不上"。
+        // 用 query 实词在描述里的命中数重排；不认任何具体照片，纯通用规则。
+        const _kw = keyTerms(query);
+        const _hits = (it) => {
+            const s = String(it.desc || '') + ' ' + String(it.file || '');
+            let n = 0;
+            for (const k of _kw) {
+                const forms = SYN[k] || [k];
+                if (forms.some((f) => s.includes(f))) n += GENERIC.includes(k) ? 0.5 : 1;
+            }
+            return n;
+        };
+        if (_kw.length > 1) {
+            items.sort((a, b) => _hits(b) - _hits(a));
+            log('[SHW] 关键词重排 ' + _kw.join('/') + ' → ' + items.map((x) => (x.file || '') + ':' + _hits(x)).join(' | '));
+        }
+        items.splice(5);
         // 带时间窗时再跑一次纯语义检索：用户可能记错时间，而时间窗里恰好有别的照片，
         // 只按时间信就会答"没存"（1119 实测：问"2025年12月词云海报"，时间窗里只有猫）。
         if (tr && !timeMiss) {
@@ -546,7 +594,7 @@ async function shwSearch(query, who) {
                         const a = it.asset || {};
                         if (!a.file_name || seenFile.has(a.file_name)) return false;
                         seenFile.add(a.file_name); return true;
-                    }).slice(0, 3).map((it) => ({
+                    }).slice(0, 12).map((it) => ({
                         id: it.asset.id, file: it.asset.file_name, time: it.asset.captured_at,
                     }));
                 }
@@ -564,6 +612,10 @@ async function shwSearch(query, who) {
                     if (obs) it.desc = String(obs.caption).trim();
                 } catch (e) { /* 单条失败不影响 */ }
             }));
+            // 时间窗外的候选也要按 query 实词挑，否则补进来的全是语义最近的猫狗，
+            // 用户说的那张排不上（1126 实测："2025年12月词云海报"，真身在 2023 年那张）
+            if (_kw && _kw.length > 1) altItems.sort((a, b) => _hits(b) - _hits(a));
+            altItems.splice(3);
             log('[SHW] 另补 ' + altItems.length + ' 条（时间窗外的候选）');
         }
         return { count: items.length, total: _filteredAll.length, files: _filteredAll.map((x) => ((x.asset || {}).file_name) || '').filter(Boolean), items, events, scope, timeMiss, askedTime: tr ? tr.label : '', altItems };
@@ -769,6 +821,7 @@ async function think(userText, who) {
         + '\n· 证据里没有能比的项，就说"这几张里看不出来"，别硬选一个。'
         + '\n\n【别替人认领】'
         + '\n· 证据里只写了"左边的男士""穿蓝衣服的人"这种，没写名字的 → 不许推断成"是你哥""是你弟弟"。'
+        + '\n· 证据里**没有**"画面里的人"这一行，说明这张照片没标注过：问"是不是你哥"就答"照片里没写是谁，我认不出"，不许拿家里人对号。'
         + '\n· 但**要把看到的样子说出来**：几个人、穿什么、在做什么，这些是画面里真有的。'
         + '\n  正确说法："照片里是两个人，左边戴眼镜穿黑色 T 恤，右边穿蓝色运动衫；但他们是谁我没存过，认不出。"'
         + '\n  只说一句"我认不出"就完了，等于什么都没答。'
