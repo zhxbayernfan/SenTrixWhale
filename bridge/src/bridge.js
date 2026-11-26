@@ -1452,12 +1452,15 @@ function pickPhotoByReply(reply, hits) {
         const byYear = items.find((x) => years.some((y) => String(x.time || '').startsWith(y)));
         if (byYear) return byYear;
     }
-    const kws = keyTerms(String(reply || '')).slice(0, 40);
-    if (!kws.length) return items[0];
+    // 用"专有词"而不是 2-gram：大写英文、4 字以上中文片段。
+    // 回答里的"BIOTECHNOLOGY""生物信息学系"这种才是能定位到具体照片的证据，
+    // "写着/上面"这类在每张描述里都有，算进去只会把票投给错误的那张。
+    const hard = String(reply || '').match(/[A-Z]{3,}|[\u4e00-\u9fa5]{4,}/g) || [];
+    if (!hard.length) return items[0];
     let best = items[0], bestN = -1;
     for (const it of items) {
         const t = String(it.desc || '') + ' ' + String(it.file || '');
-        const n = kws.filter((k) => t.includes(k)).length;
+        const n = hard.filter((k) => t.includes(k)).length;
         if (n > bestN) { bestN = n; best = it; }
     }
     return best;
@@ -1884,17 +1887,23 @@ async function _handleInner(userText, senderId, dest, imgs) {
             // 回答里没提年份 = 还在聊同一张，别按词命中挑到隔壁去
             const _tp = _topicPhoto.get(String(senderId));
             const _pt = _turnSeq.get(String(senderId)) || 0;
-            if (_pick && _tp && (_pt - (_tp.turn || 0) <= 3) && !/20\d{2}/.test(reply)) _pick = _tp;
+            // 回答没提新年份时，比一比"回答更像话题照片还是更像挑出来的那张"：
+            // 更像话题就用话题（同话题不换图），更像新的就用新的（换照片了）。
+            if (_pick && _tp && (_pt - (_tp.turn || 0) <= 3) && !/20\d{2}/.test(reply)) {
+                const _hard = reply.match(/[A-Z]{3,}|[\u4e00-\u9fa5]{4,}/g) || [];
+                const _nTp = _tp.desc ? _hard.filter((k) => _tp.desc.includes(k)).length : 0;
+                const _nPick = _pick.desc ? _hard.filter((k) => _pick.desc.includes(k)).length : 0;
+                if (_nTp > _nPick) _pick = _tp;
+            }
             if (_pick && _pick.id) {
                 const _t = _turnSeq.get(String(senderId)) || 0;
                 const _hist = (_sentPhoto.get(String(senderId)) || []).filter((x) => _t - x.turn <= 20);
                 const _dup = _hist.some((x) => x.id === _pick.id && (_t - x.turn) <= 5);
-                log('[发图挑选] pick=' + (_pick.id) + ' tp=' + (_tp && _tp.id) + ' t=' + _t + ' hist=' + JSON.stringify(_hist) + ' dup=' + !!_dup);
                 if (!_dup) {
                     _pendingPhotoSend = _pick.id;
                     _hist.push({ id: _pick.id, turn: _t });
                     _sentPhoto.set(String(senderId), _hist);
-                    _topicPhoto.set(String(senderId), { id: _pick.id, file: _pick.file, time: _pick.time, turn: _t });
+                    _topicPhoto.set(String(senderId), { ..._pick, turn: _t });
                     log('[发图] 顺带带出: ' + _pick.file + ' 第' + _t + '轮');
                 }
             }
