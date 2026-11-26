@@ -137,14 +137,25 @@ function familySum(){try{const CL=path.join(ROOT,'state','chat_log_sentrix.jsonl
 // ---------- 对话历史(最近5轮) ----------
 const chatHistory = {};
 const MAX_HISTORY = 5;
+// [测试隔离] 回归集按"组"重置历史：组内保持连续对话（指代题要靠前文），
+// 组间清空，免得 28 题一路累积把 4B 的上下文稀释掉（1126 实测：连跑到照片组后半段
+// 开始出"收到。"这种退化答复）。
+// [上下文预算] 不再写死 12 条：按 token 预算从上往下装，能装多少装多少。
+// 中文按 1.5 字/token 估，单条最多 200 字（她一条回复通常就 100~150 字）。
+const HISTORY_BUDGET = 4000;
 function getHistory(who) {
-    // [FIX-12] 原来直接返回空数组"避免混淆"，结果每轮都是失忆的：
-    // 多聊几句就接不上，两个号更是分不清。按 QQ 号隔离 + 截断，才是正确做法。
     const h = chatHistory[who] || [];
-    return h.slice(-12).map((m) => ({
-        role: m.role,
-        content: String(m.content || '').slice(0, 150),
-    }));
+    const out = [];
+    let used = 0;
+    for (let i = h.length - 1; i >= 0; i--) {
+        const m = h[i];
+        const content = String(m.content || '').slice(0, 200);
+        const t = Math.ceil(content.length / 1.5) + 4;
+        if (used + t > HISTORY_BUDGET) break;
+        used += t;
+        out.unshift({ role: m.role, content });
+    }
+    return out;
 }
 function addHistory(who, userText, reply) {
     if (!chatHistory[who]) chatHistory[who] = [];
@@ -221,6 +232,12 @@ function timeRangeOf(q) {  // [FIX-7] 时间词 -> SHW 的 time_range + 本地�
     }
     if (/去年/.test(q)) return { label: `${y - 1}年`, from: `${y - 1}-01-01`, to: `${y - 1}-12-31` };
     if (/今年/.test(q)) return { label: `${y}年`, from: `${y}-01-01`, to: `${y}-12-31` };
+    if (/这个月|本月|当月/.test(q)) return mk(y, m);
+    if (/这周|本周|这个星期|这星期/.test(q)) {
+        const t = new Date();
+        const mon = new Date(t.getTime() - ((t.getDay() + 6) % 7) * 864e5);
+        return { label: '本周', from: local(mon), to: local(t) };
+    }
     if (/上个月/.test(q)) return mk(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1);
     if (/上周|上星期|这几天|最近/.test(q)) { const t = new Date(Date.now() - 7 * 864e5); return mk(t.getFullYear(), t.getMonth() + 1); }
     const ym = q.match(/(\d{4})年(\d{1,2})?月?/);
@@ -578,6 +595,8 @@ const roleText = () => {
 // ---------- 工程鲸chatLog(调试工具,可随意清空) ----------
 const CL = path.join(ROOT, 'state', 'chat_log_sentrix.jsonl');
 const chatLog = (obj) => {
+    // 回归测试跑完不留痕：否则每次跑套件都往真实聊天记录里灌 28 条
+    if (process.env.STW_TEST === '1') return;
     const d = new Date(); const p2 = (x) => String(x).padStart(2, '0');
     const ordered = {
         event: obj.event,
@@ -764,6 +783,7 @@ async function think(userText, who) {
         + '\n· 证据里没有能比的项，就说"这几张里看不出来"，别硬选一个。'
         + '\n\n【别替人认领】'
         + '\n· 证据里只写了"左边的男士""穿蓝衣服的人"这种，没写名字的 → 不许推断成"是你哥""是你弟弟"。'
+        + '\n· 证据里**没有**"画面里的人"这一行，说明这张照片没标注过：问"是不是你哥"就答"照片里没写是谁，我认不出"，不许拿家里人对号。'
         + '\n· 但**要把看到的样子说出来**：几个人、穿什么、在做什么，这些是画面里真有的。'
         + '\n  正确说法："照片里是两个人，左边戴眼镜穿黑色 T 恤，右边穿蓝色运动衫；但他们是谁我没存过，认不出。"'
         + '\n  只说一句"我认不出"就完了，等于什么都没答。'
@@ -1057,6 +1077,50 @@ function identityAsk(text, who) {
     return null;
 }
 
+// [计数按人] "我弟 25年4月30日有几张"要按人算，不能一律当"我"。
+// member=家里确实有这个人；self=说的是自己；absent=家里没这个人（要好好说，不能报错）。
+function relativeQuery(text, who) {
+    const t = String(text || '').replace(/\s/g, '');
+    const me = memberByQq(who);
+    if (!me) return null;
+    const m = t.match(/我(堂哥|堂妹|表哥|表妹|哥哥|弟弟|姐姐|妹妹|大哥|小弟|哥|弟|姐|妹)/);
+    if (!m) return null;
+    const word = m[1];
+    const hit = (x) => x.role === word || (x.aliases || []).includes(word);
+    const other = familyMembers().find((x) => x.qq !== me.qq && hit(x));
+    if (other) return { type: 'member', member: other, me, word };
+    // 说的是自己："我哥"从堂哥嘴里说出来，指的就是他自己
+    if (hit(me)) return { type: 'self', me, word };
+    // 叫错称呼但人确实在家里（"我表妹"其实是堂妹），按那个人算；
+    // 长幼方向不同的不算（把"我弟"认成堂哥，只会更错）。
+    const cls = classOf(word);
+    if (cls) {
+        const junior = /弟|妹/.test(word);
+        const near = familyMembers().find((x) => x.qq !== me.qq
+            && classOf(x.role) === cls && (/弟|妹/.test(x.role) === junior));
+        if (near) return { type: 'near', member: near, me, word };
+    }
+    return { type: 'absent', me, word };
+}
+
+// 口吻照角色卡「你说笑了，你自己就是堂妹」：先轻纠一句，再说明名单里只有谁。
+function absentReply(rel, who) {
+    const others = familyMembers().filter((x) => x.qq !== String(who))
+        .map((x) => `${x.name}（${x.role}）`).join('、') || '家里人';
+    const w = ({ 哥: '哥哥', 弟: '弟弟', 姐: '姐姐', 妹: '妹妹' })[rel.word] || rel.word;
+    return rel.type === 'self'
+        ? `你说笑了，你自己就是家里的${rel.me.role}呀，没有别的${w}～`
+        : `你说笑了，我这儿只认识${others}，${w}还没加进聊天名单哦～`;
+}
+
+// 人工标注表里含这个人的照片数（SHW 人脸没绑成人物的簇不算，宁可少说）
+function countLabeled(name) {
+    try {
+        const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'people_map.json'), 'utf8'));
+        return Object.values(d).filter((v) => Array.isArray(v) && v.includes(name)).length;
+    } catch (e) { return 0; }
+}
+
 async function countPhotos() {
     try {
         const photoDir = path.join(ROOT, 'media', 'photos');
@@ -1346,27 +1410,62 @@ async function _handleInner(userText, senderId, dest, imgs) {
         if (_tr || _scope) {
             const hits = await shwSearch(userText, senderId);
             let n = hits ? (hits.total ?? hits.count ?? 0) : 0;
-            // "我拍了几张"要按本人过滤：命中集合里凡是有标注的，只数含本人的那些。
-            // 没有标注的照片判断不了，就不参与过滤（宁可多数，也不把人拍的说成没拍）。
-            const _meName = memberByQq(String(senderId))?.name;
-            if (_meName && hits && Array.isArray(hits.files)) {
+            const _me = memberByQq(String(senderId));
+            const _rel = relativeQuery(userText, senderId);
+            // [计数按人] 问的是谁就数谁。家里没这个人时别报"没存到"，
+            // 顺着家庭结构说一句（1126 实测：堂妹问"我弟"，答"一共 3 张"，
+            // 其实她是家里最小的妹妹，根本没有弟弟）。
+            if (_rel && (_rel.type === 'absent' || _rel.type === 'self')) {
+                const _reply = absentReply(_rel, senderId);
+                chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: _reply });
+                await replyTo(dest, _reply, userText);
+                return;
+            }
+            const _target = _rel && _rel.member ? _rel.member.name : '';
+            if (_target) {
+                // 只数有这个人标注的照片；一条标注都没有判断不了，就按检索总数
+                const labeled = (hits && Array.isArray(hits.files) ? hits.files : []).filter((f) => peopleOf(f));
+                if (labeled.length) n = labeled.filter((f) => (peopleOf(f) || []).includes(_target)).length;
+            } else if (_me && hits && Array.isArray(hits.files) && /我拍的|拍的我|我的照片|有我的/.test(userText)) {
+                // 只有明确说"我拍的/有我的"才按本人过滤；
+                // 问"某天一共有几张"就是数全部（1126 实测：25年4月30日库里 5 张，
+                // 被这条无条件过滤成"本人 3 张"）。
                 const labeled = hits.files.filter((f) => peopleOf(f));
-                const mine = labeled.filter((f) => (peopleOf(f) || []).includes(_meName));
-                if (labeled.length) n = mine.length;
+                if (labeled.length) n = labeled.filter((f) => (peopleOf(f) || []).includes(_me.name)).length;
             }
             const _where = _scope ? `《${_scope}》` : '';
             const _when = _tr ? _tr.label : '';
-            const reply = n > 0 ? `${_when}${_where}一共 ${n} 张` : `${_when}${_where}这个我没存到`;
+            let reply = n > 0 ? `${_when}${_where}一共 ${n} 张` : `${_when}${_where}这个我没存到`;
+            if (_target && n === 0) reply = `${_when}${_where}没找到有${personLabel(_target, _me && _me.name)}的照片`;
             chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: reply });
             await replyTo(dest, reply, userText);
             return;
         }
         const count = await countPhotos();
         if (count !== null) {
-            const reply = '记忆库里现在有' + count.total + '张照片呢～'; // [FIX-2]
-            // 记录chatLog
+            // [计数按人] 没有时间/地点条件时，问"有我的/我堂妹的"照样按人算；
+            // "我拍的"判断不了，照角色卡规矩直说看不出来，别编
+            // （1126 实测：问"我拍了几张"原来直接回全库 58 张）。
+            const _rel0 = relativeQuery(userText, senderId);
+            const _me0 = memberByQq(String(senderId));
+            let reply;
+            if (_rel0 && (_rel0.type === 'absent' || _rel0.type === 'self')) {
+                reply = absentReply(_rel0, senderId);
+            } else {
+                const _who0 = _rel0 && _rel0.member ? _rel0.member.name
+                    : (_me0 && /有我的|我的照片|我在里面|我自己的照片|我拍的|我拍了|我拍过/.test(userText) ? _me0.name : '');
+                if (_who0) {
+                    const nn = countLabeled(_who0);
+                    const _lbl = _me0 && _who0 === _me0.name ? '你' : _who0;
+                    reply = nn > 0
+                        ? `记忆库里现在有 ${count.total} 张照片，我认得出有${_lbl}的是 ${nn} 张`
+                        : `记忆库里现在有 ${count.total} 张照片，不过还没认出哪张里有${_lbl}`;
+                } else {
+                    reply = '记忆库里现在有' + count.total + '张照片呢～'; // [FIX-2]
+                }
+            }
             chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: reply });
-        await replyTo(dest, reply, userText);
+            await replyTo(dest, reply, userText);
             return;
         }
     }
@@ -1706,7 +1805,11 @@ async function replyTo(dest, text, userInput) {
     const msg = [{ type: 'text', data: { text } }];
     // 匹配表情包
     // [发图] 用户要照片 → 从库里取那张的预览图发过去（不是表情包）
-    if (_pendingPhotoSend) {
+    // [发图] 嘴上说不能发（拒绝要原图）就别附预览图，否则自相矛盾
+    const _refuse = /没法|不能发|发不了|没有原图|不方便|不能给|拿不到原图/.test(text);
+    // 用户点名要"原图/原始文件"时不发预览图——预览不是原图，发了等于答应了又没做到
+    const _wantOriginal = /原图|原始文件|原文件|源文件/.test(String(userInput || ''));
+    if (_pendingPhotoSend && !_refuse && !_wantOriginal) {
         try {
             const pr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(_pendingPhotoSend) + '/preview',
                 { signal: AbortSignal.timeout(15000) });
@@ -1757,5 +1860,5 @@ if (!process.env.STW_NO_CONNECT) {
     log("[测试] STW_NO_CONNECT=1, 跳过 WS 连接");
 }
 // [测试用] 导出以便无 QQ 环境跑通链路
-module.exports = { handle, connect };
+module.exports = { handle, connect, _resetHistory: () => { for (const k in chatHistory) delete chatHistory[k]; } };
 
