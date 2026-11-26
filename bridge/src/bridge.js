@@ -1057,6 +1057,32 @@ function identityAsk(text, who) {
     return null;
 }
 
+// [计数按人] "我弟 25年4月30日有几张"要按人算，不能一律当"我"。
+// member=家里确实有这个人；self=说的是自己；absent=家里没这个人（要好好说，不能报错）。
+function relativeQuery(text, who) {
+    const t = String(text || '').replace(/\s/g, '');
+    const me = memberByQq(who);
+    if (!me) return null;
+    const m = t.match(/我(堂哥|堂妹|表哥|表妹|哥哥|弟弟|姐姐|妹妹|大哥|小弟|哥|弟|姐|妹)/);
+    if (!m) return null;
+    const word = m[1];
+    const hit = (x) => x.role === word || (x.aliases || []).includes(word);
+    const other = familyMembers().find((x) => x.qq !== me.qq && hit(x));
+    if (other) return { type: 'member', member: other, me, word };
+    // 说的是自己："我哥"从堂哥嘴里说出来，指的就是他自己
+    if (hit(me)) return { type: 'self', me, word };
+    // 叫错称呼但人确实在家里（"我表妹"其实是堂妹），按那个人算；
+    // 长幼方向不同的不算（把"我弟"认成堂哥，只会更错）。
+    const cls = classOf(word);
+    if (cls) {
+        const junior = /弟|妹/.test(word);
+        const near = familyMembers().find((x) => x.qq !== me.qq
+            && classOf(x.role) === cls && (/弟|妹/.test(x.role) === junior));
+        if (near) return { type: 'near', member: near, me, word };
+    }
+    return { type: 'absent', me, word };
+}
+
 async function countPhotos() {
     try {
         const photoDir = path.join(ROOT, 'media', 'photos');
@@ -1346,17 +1372,39 @@ async function _handleInner(userText, senderId, dest, imgs) {
         if (_tr || _scope) {
             const hits = await shwSearch(userText, senderId);
             let n = hits ? (hits.total ?? hits.count ?? 0) : 0;
-            // "我拍了几张"要按本人过滤：命中集合里凡是有标注的，只数含本人的那些。
-            // 没有标注的照片判断不了，就不参与过滤（宁可多数，也不把人拍的说成没拍）。
-            const _meName = memberByQq(String(senderId))?.name;
-            if (_meName && hits && Array.isArray(hits.files)) {
+            const _me = memberByQq(String(senderId));
+            const _rel = relativeQuery(userText, senderId);
+            // [计数按人] 问的是谁就数谁。家里没这个人时别报"没存到"，
+            // 顺着家庭结构说一句（1126 实测：堂妹问"我弟"，答"一共 3 张"，
+            // 其实她是家里最小的妹妹，根本没有弟弟）。
+            if (_rel && (_rel.type === 'absent' || _rel.type === 'self')) {
+                const _others = familyMembers().filter((x) => x.qq !== String(senderId))
+                    .map((x) => `${x.name}（${x.role}）`).join('、') || '家里人';
+                const _w = ({ 哥: '哥哥', 弟: '弟弟', 姐: '姐姐', 妹: '妹妹' })[_rel.word] || _rel.word;
+                // 口吻照角色卡：「你说笑了，你自己就是堂妹」——先轻纠一句，再接着答
+                const _reply = _rel.type === 'self'
+                    ? `你说笑了，你自己就是家里的${_rel.me.role}呀，没有别的${_w}～`
+                    : `你说笑了，我这儿只认识${_others}，${_w}还没加进聊天名单哦～`;
+                chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: _reply });
+                await replyTo(dest, _reply, userText);
+                return;
+            }
+            const _target = _rel && _rel.member ? _rel.member.name : '';
+            if (_target) {
+                // 只数有这个人标注的照片；一条标注都没有判断不了，就按检索总数
+                const labeled = (hits && Array.isArray(hits.files) ? hits.files : []).filter((f) => peopleOf(f));
+                if (labeled.length) n = labeled.filter((f) => (peopleOf(f) || []).includes(_target)).length;
+            } else if (_me && hits && Array.isArray(hits.files) && /我拍的|拍的我|我的照片|有我的/.test(userText)) {
+                // 只有明确说"我拍的/有我的"才按本人过滤；
+                // 问"某天一共有几张"就是数全部（1126 实测：25年4月30日库里 5 张，
+                // 被这条无条件过滤成"本人 3 张"）。
                 const labeled = hits.files.filter((f) => peopleOf(f));
-                const mine = labeled.filter((f) => (peopleOf(f) || []).includes(_meName));
-                if (labeled.length) n = mine.length;
+                if (labeled.length) n = labeled.filter((f) => (peopleOf(f) || []).includes(_me.name)).length;
             }
             const _where = _scope ? `《${_scope}》` : '';
             const _when = _tr ? _tr.label : '';
-            const reply = n > 0 ? `${_when}${_where}一共 ${n} 张` : `${_when}${_where}这个我没存到`;
+            let reply = n > 0 ? `${_when}${_where}一共 ${n} 张` : `${_when}${_where}这个我没存到`;
+            if (_target && n === 0) reply = `${_when}${_where}没找到有${personLabel(_target, _me && _me.name)}的照片`;
             chatLog({ event: 'chat', who: senderId, dest: dest.kind, in: userText, out: reply });
             await replyTo(dest, reply, userText);
             return;
