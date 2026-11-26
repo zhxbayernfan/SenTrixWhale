@@ -140,14 +140,22 @@ const MAX_HISTORY = 5;
 // [测试隔离] 回归集按"组"重置历史：组内保持连续对话（指代题要靠前文），
 // 组间清空，免得 28 题一路累积把 4B 的上下文稀释掉（1126 实测：连跑到照片组后半段
 // 开始出"收到。"这种退化答复）。
+// [上下文预算] 不再写死 12 条：按 token 预算从上往下装，能装多少装多少。
+// 中文按 1.5 字/token 估，单条最多 200 字（她一条回复通常就 100~150 字）。
+const HISTORY_BUDGET = 4000;
 function getHistory(who) {
-    // [FIX-12] 原来直接返回空数组"避免混淆"，结果每轮都是失忆的：
-    // 多聊几句就接不上，两个号更是分不清。按 QQ 号隔离 + 截断，才是正确做法。
     const h = chatHistory[who] || [];
-    return h.slice(-12).map((m) => ({
-        role: m.role,
-        content: String(m.content || '').slice(0, 150),
-    }));
+    const out = [];
+    let used = 0;
+    for (let i = h.length - 1; i >= 0; i--) {
+        const m = h[i];
+        const content = String(m.content || '').slice(0, 200);
+        const t = Math.ceil(content.length / 1.5) + 4;
+        if (used + t > HISTORY_BUDGET) break;
+        used += t;
+        out.unshift({ role: m.role, content });
+    }
+    return out;
 }
 function addHistory(who, userText, reply) {
     if (!chatHistory[who]) chatHistory[who] = [];
@@ -684,6 +692,26 @@ async function think(userText, who) {
             hits.items.sort((a, b) => _rank(a) - _rank(b) || String(b.time || '').localeCompare(String(a.time || '')));
             log('[本人优先] ' + hits.items.slice(0, 3).map((x) => (x.file || '?') + ':' + (x.people || []).join('/')).join(' | '));
         }
+        // [话题延续] 追问（"这张/那张/上面/除了…"）时沿用上一轮那张照片。
+        // 否则"海报上除了中文还有什么"里没有"词云"两字，检索会漂到别的海报，
+        // 图和答案一起漂（1126 实测：同一张海报连问三遍，发出三张不同的图）。
+        // 必须放在本人优先排序之后，否则补回队首会被排序挤走。
+        if (hits && Array.isArray(hits.items) && hits.items.length) {
+            const _ask = /这张|那张|上面|除了|还有|它|这照片|那照片/.test(userText);
+            const _tp = _topicPhoto.get(String(who));
+            if (_ask && _tp && _tp.id) {
+                const _i = hits.items.findIndex((x) => x.id === _tp.id);
+                if (_i > 0) {
+                    const [x] = hits.items.splice(_i, 1);
+                    hits.items.unshift(x);
+                    log('[话题] 沿用上一轮: ' + x.file);
+                } else if (_i === -1) {
+                    hits.items.unshift(_tp);
+                    log('[话题] 补回上一轮: ' + _tp.file);
+                }
+            }
+            if (hits.items[0] && hits.items[0].id) _topicPhoto.set(String(who), hits.items[0]);
+        }
     } catch (e) { /* 排序失败不影响回答 */ }
     // [发图] 用户在要照片（"给我一张""发我一张"），不是问照片里有什么
     _pendingPhotoSend = null;
@@ -705,6 +733,22 @@ async function think(userText, who) {
         } else if (_wantPhoto && _first && _first.id) {
             _pendingPhotoSend = _first.id;
             log('[发图] 准备附带资产图: ' + _first.id);
+        } else {
+            // [顺带发图] 聊到照片就把那张带出来，用户不用自己去翻相册。
+            // 同一张 10 条消息内只发一次，免得连问几句就刷屏（1126 定的口径）。
+            const _aboutPhoto = /那张|这张|照片|图|合影|海报|体育场|草坪|展厅|电梯/.test(userText);
+            const _t = (_turnSeq.get(String(who)) || 0) + 1;
+            _turnSeq.set(String(who), _t);
+            const _last = _sentPhoto.get(String(who));
+            const _dup = _last && _first && _last.id === _first.id && (_t - _last.turn) <= 5;
+            if (_aboutPhoto && _first && _first.id && !_dup) {
+                _pendingPhotoSend = _first.id;
+                log('[发图] 顺带带出: ' + _first.id + ' 第' + _t + '轮');
+            }
+        }
+        if (_pendingPhotoSend) {
+            const _t2 = _turnSeq.get(String(who)) || 0;
+            _sentPhoto.set(String(who), { id: _pendingPhotoSend, turn: _t2 });
         }
     } catch (e) { /* 不影响正常回答 */ }
 
@@ -1397,6 +1441,10 @@ const _lastNum = new Map();   // 每个用户上一条是不是数字消息
 const _lastPhoto = new Map();
 // [发图] 用户要照片时，这一轮要附带的资产 id（think 里算，replyTo 里用）
 let _pendingPhotoSend = null;
+// [顺带发图] 同一个人最近发过哪张、第几轮发的——5 轮（约 10 条消息）内同图不重发
+const _sentPhoto = new Map();
+const _turnSeq = new Map();
+const _topicPhoto = new Map();   // 谁这一轮在聊哪张（追问式 query 沿用上一轮那张）
 // [指代] 最近一次检索真正聊到的几张照片。用户说"这几张/这三张"时，
 // 每次重新检索会搜到别的照片（1120 实测：问"这三张里最早的是哪张"，搜回来的是
 // 商场电梯和博物馆），所以得记住刚才聊的是哪几张。
@@ -1476,7 +1524,7 @@ async function _handleInner(userText, senderId, dest, imgs) {
                 // 只数有这个人标注的照片；一条标注都没有判断不了，就按检索总数
                 const labeled = (hits && Array.isArray(hits.files) ? hits.files : []).filter((f) => peopleOf(f));
                 if (labeled.length) n = labeled.filter((f) => (peopleOf(f) || []).includes(_target)).length;
-            } else if (_me && hits && Array.isArray(hits.files) && /我拍的|拍的我|我的照片|有我的/.test(userText)) {
+            } else if (_me && hits && Array.isArray(hits.files) && /我拍的|我拍了|拍的我|我的照片|有我的/.test(userText)) {
                 // 只有明确说"我拍的/有我的"才按本人过滤；
                 // 问"某天一共有几张"就是数全部（1126 实测：25年4月30日库里 5 张，
                 // 被这条无条件过滤成"本人 3 张"）。
@@ -1855,13 +1903,15 @@ async function replyTo(dest, text, userInput) {
     const msg = [{ type: 'text', data: { text } }];
     // 匹配表情包
     // [发图] 用户要照片 → 从库里取那张的预览图发过去（不是表情包）
-    if (_pendingPhotoSend) {
+    // [发图] 嘴上说不能发（拒绝要原图）就别附预览图，否则自相矛盾
+    const _refuse = /没法|不能发|发不了|没有原图|不方便|不能给|拿不到原图/.test(text);
+    if (_pendingPhotoSend && !_refuse) {
         try {
             const pr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(_pendingPhotoSend) + '/preview',
                 { signal: AbortSignal.timeout(15000) });
             if (pr.ok) {
                 const buf = Buffer.from(await pr.arrayBuffer());
-                msg.push({ type: 'image', data: { file: 'base64://' + buf.toString('base64') } });
+                msg.push({ type: 'image', data: { file: 'base64://' + buf.toString('base64'), summary: '[照片]' } });
                 log('[发图] 已发送 ' + _pendingPhotoSend + '（' + Math.round(buf.length / 1024) + 'KB）');
             } else {
                 log('[发图] 取图失败 HTTP ' + pr.status);
