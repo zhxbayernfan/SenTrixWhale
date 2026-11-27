@@ -648,7 +648,10 @@ async function think(userText, who) {
         // 实际用户会说"给我25年4月底在杭州的照片""我要我的这张4月30的"，
         // 全被判成不要图，于是只回文字。这里放宽到"动作词 + 15 字内的照片/图/张"，
         // 再用问句词排除"哪几张/有没有/是谁"这类查记忆的问法。
-        const _wantPhoto = /(给我|发我|发个|我要|来一张|来张|看看|瞅瞅|找一张|找张).{0,15}(照片|图片|图|张)/.test(userText)
+        // 中文里动作词和名词顺序不定（"发我那张照片" / "把那张照片发我"），
+        // 所以分开判：有要图的动作 + 提到照片，而不是卡固定顺序
+        const _wantPhoto = /给我|发我|发个|我要|来一张|来张|看看|瞅瞅|找一张|找张/.test(userText)
+            && /照片|图片|图|张/.test(userText)
             && !/是不是|有没有|哪一?张|几张|多少|是谁|在哪|什么时候/.test(userText);
         // [指代] "给我那张照片/刚才那张"指上一次真正聊到的那张，不要重新检索——
         // 1124 实测：问"给我那张照片"，检索命中了济南一张无关的。
@@ -1807,12 +1810,14 @@ async function replyTo(dest, text, userInput) {
     // [发图] 用户要照片 → 从库里取那张的预览图发过去（不是表情包）
     // [发图] 嘴上说不能发（拒绝要原图）就别附预览图，否则自相矛盾
     const _refuse = /没法|不能发|发不了|没有原图|不方便|不能给|拿不到原图/.test(text);
-    // 用户点名要"原图/原始文件"时不发预览图——预览不是原图，发了等于答应了又没做到
+    // 本人（私聊）要原图 → 给原图；别人要原图 → 不发，只给预览的说法
+    const _isOwner = dest.kind === 'private' && owners().includes(String(dest.id));
     const _wantOriginal = /原图|原始文件|原文件|源文件/.test(String(userInput || ''));
-    if (_pendingPhotoSend && !_refuse && !_wantOriginal) {
+    if (_pendingPhotoSend && !_refuse && (!_wantOriginal || _isOwner)) {
         try {
-            const pr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(_pendingPhotoSend) + '/preview',
-                { signal: AbortSignal.timeout(15000) });
+            const _ep = _wantOriginal ? '/file' : '/preview';
+            const pr = await fetch(cfg.shw.apiBase + '/api/v1/assets/' + encodeURIComponent(_pendingPhotoSend) + _ep,
+                { signal: AbortSignal.timeout(20000) });
             if (pr.ok) {
                 const buf = Buffer.from(await pr.arrayBuffer());
                 msg.push({ type: 'image', data: { file: 'base64://' + buf.toString('base64') } });
